@@ -1,0 +1,6 @@
+{
+  "name": "company",
+  "version": "0.1.0",
+  "description": "Runs every job under the client charter: gates, live board, pinned workers.",
+  "types": "./types/index.d.ts"
+}

@@ -79,10 +79,13 @@ export function meterLine(i: {
   windows: Windows
   routed: number
   governed: number
+  diet?: number
 }): string {
   const parts = ['company']
   if (i.windows.fiveHour !== undefined) parts.push(`5h ${Math.round(i.windows.fiveHour)}%`)
   if (i.windows.week !== undefined) parts.push(`week ${Math.round(i.windows.week)}%`)
   parts.push(`${i.routed} subagents routed`, `${i.governed} efforts governed`)
+  // Shown once the diet has acted, so a quiet session keeps its short line.
+  if (i.diet) parts.push(`${i.diet} diet`)
   return (i.economy ? 'ECONOMY · ' : '') + parts.join(' · ')
 }

@@ -72,8 +72,9 @@ test('routed spawns are sent on with the model, and tallied', async ($, on) => {
   expect(seen[0]!.model).toBe('haiku')
   expect(seen[1]!.model).toBe('sonnet')
   expect(statuses).toEqual([
-    'company · 1 subagents routed · 0 efforts governed',
-    'company · 2 subagents routed · 0 efforts governed',
+    // Each spawn also took the context diet's report block (the ` · n diet` suffix).
+    'company · 1 subagents routed · 0 efforts governed · 1 diet',
+    'company · 2 subagents routed · 0 efforts governed · 2 diet',
   ])
 })
 

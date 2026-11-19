@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { CHARTER } from './charter'
+import { GREP_LINES, READ_LINES, dietPrompt, dietTotal, readNote, recordDiet, shouldCapRead } from './diet'
 import { routeSpawn, type Route } from './router'
 import {
   governEffort,
@@ -78,6 +79,7 @@ function showStatus($: EngineInterface, st: MeterState) {
         windows: st.windows,
         routed: st.routedTotal,
         governed: governedTotal(),
+        diet: dietTotal(),
       }),
     )
   } catch {
@@ -175,6 +177,7 @@ export const register: Register = (on, options) => {
   on('agent.spawn', async ($, e, next) => {
     // Not a guard: if anything here throws, the spawn goes ahead unchanged.
     let route: Route | null = null
+    let prompt: string | null = null
     try {
       const skip = e.isTeammate || e.resume || e.workflow
       route = skip
@@ -186,41 +189,91 @@ export const register: Register = (on, options) => {
             prompt: e.prompt,
             providerIsEngine: e.provider.plugin === 'engine',
           })
+      // The compact-report block: not for forks, teammates, resumes or workflow agents.
+      prompt = skip || e.fork ? null : dietPrompt(e.prompt)
     } catch {
       return next(e)
     }
-    if (!route) return next(e)
+    if (!route && prompt === null) return next(e)
 
-    const result = await next({ ...e, model: route.model })
+    const result = await next({
+      ...e,
+      ...(route ? { model: route.model } : {}),
+      ...(prompt !== null ? { prompt } : {}),
+    })
 
     try {
       if (!result.deny) {
-        if (result.agentId) efforts.set(result.agentId, route.effort)
-        routedThisSession += 1
-        let total = routedThisSession
-        try {
-          const old = (await $.store.get('routes')) as
-            | Record<string, number>
-            | undefined
-          const t = {
-            haiku: 0,
-            sonnet: 0,
-            opus: 0,
-            fable: 0,
-            since: await $.clock.now(),
-            ...(old && typeof old === 'object' ? old : {}),
-          }
-          t[route.model] = (Number(t[route.model]) || 0) + 1
-          total = t.haiku + t.sonnet + t.opus + t.fable
-          await $.store.set('routes', t)
-        } catch {
-          // The tally is best-effort.
+        if (prompt !== null) {
+          recordDiet('report')
+          if (!route) showStatus($, st)
         }
-        st.routedTotal = total
-        showStatus($, st)
+        if (route) {
+          if (result.agentId) efforts.set(result.agentId, route.effort)
+          routedThisSession += 1
+          let total = routedThisSession
+          try {
+            const old = (await $.store.get('routes')) as
+              | Record<string, number>
+              | undefined
+            const t = {
+              haiku: 0,
+              sonnet: 0,
+              opus: 0,
+              fable: 0,
+              since: await $.clock.now(),
+              ...(old && typeof old === 'object' ? old : {}),
+            }
+            t[route.model] = (Number(t[route.model]) || 0) + 1
+            total = t.haiku + t.sonnet + t.opus + t.fable
+            await $.store.set('routes', t)
+          } catch {
+            // The tally is best-effort.
+          }
+          st.routedTotal = total
+          showStatus($, st)
+        }
       }
     } catch {
       // Bookkeeping must never disturb the spawn.
+    }
+    return result
+  })
+
+  on('tool.call', { tool: 'Read' }, async ($, e, next) => {
+    // Not a guard: never denies; on any error the call goes down untouched.
+    let size: number | undefined
+    try {
+      if (!e.agentId && e.offset == null && e.limit == null && e.pages == null) {
+        const stat = await $.fs.stat(e.file_path)
+        if (stat.kind === 'file' && shouldCapRead(e.file_path, stat.size)) size = stat.size
+      }
+    } catch {
+      size = undefined
+    }
+    if (size === undefined) return next(e)
+    const result = await next({ ...e, limit: READ_LINES })
+    try {
+      if (result.deny !== undefined || result.isError) return result
+      recordDiet('read')
+      showStatus($, st)
+      return { ...result, context: [...(result.context ?? []), readNote(size)] }
+    } catch {
+      return result
+    }
+  })
+
+  on('tool.call', { tool: 'Grep' }, async ($, e, next) => {
+    // Not a guard: never denies.
+    if (e.agentId || e.output_mode !== 'content' || e.head_limit != null) return next(e)
+    const result = await next({ ...e, head_limit: GREP_LINES })
+    try {
+      if (result.deny === undefined && !result.isError) {
+        recordDiet('grep')
+        showStatus($, st)
+      }
+    } catch {
+      // Counting is best-effort.
     }
     return result
   })

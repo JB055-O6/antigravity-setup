@@ -1,6 +1,6 @@
 {
   "name": "company",
-  "version": "0.3.0",
-  "description": "Automatic token thrift: routes subagents to the cheapest fitting model and effort, governs wasteful effort settings, meters usage limits with automatic economy mode, and loads the client charter.",
+  "version": "0.4.0",
+  "description": "Automatic token thrift: routes subagents to the cheapest fitting model and effort, governs wasteful effort, meters limits with economy mode, keeps the main context small, and loads the client charter.",
   "types": "./types/index.d.ts"
 }

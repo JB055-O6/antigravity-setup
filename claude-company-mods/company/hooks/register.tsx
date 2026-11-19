@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { CHARTER } from './charter'
+import { directivesNote } from './directives'
 import { GREP_LINES, READ_LINES, dietPrompt, dietTotal, readNote, recordDiet, shouldCapRead } from './diet'
 import { routeSpawn, type Route } from './router'
 import {
@@ -69,6 +70,7 @@ type MeterState = {
   economy: boolean
   economySince?: number
   routedTotal: number
+  directives?: string
 }
 
 function showStatus($: EngineInterface, st: MeterState) {
@@ -80,7 +82,7 @@ function showStatus($: EngineInterface, st: MeterState) {
         routed: st.routedTotal,
         governed: governedTotal(),
         diet: dietTotal(),
-      }),
+      }) + (st.directives ? ` · ${st.directives}` : ''),
     )
   } catch {
     // The line is best-effort.
@@ -155,6 +157,11 @@ export const register: Register = (on, options) => {
       } catch {
         // One agent failing to register must not stop the others or the session.
       }
+    }
+    try {
+      st.directives = directivesNote(await $.settings.read({ key: 'enabledPlugins' }))
+    } catch {
+      // Unknown: leave the note off. The built-in directives still apply.
     }
     try {
       await applyLimits($, st, (await $.session.usage()).rateLimits)

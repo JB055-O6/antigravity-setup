@@ -3,7 +3,7 @@
 export const DIET_MARKER = '[company-diet]'
 
 export const DIET_BLOCK =
-  "[company-diet] Core directives: ponytail (smallest complete change; reuse before writing; never cut validation, security or needed tests), headroom (measure big files before reading; read only needed ranges; compute with code), caveman (short plain words; code, commands, paths, numbers and errors stay exact). Your final report goes into the main conversation's context and is paid for on every later request: give the answer or result, the proof (file paths with line numbers, the command and its exit status, a short excerpt) and anything unresolved. At most 25 lines. Never paste whole files, full logs or long command output; give a path and the relevant lines instead."
+  "[company-diet] Core directives: ponytail (smallest complete change; reuse before writing; never cut validation, security or needed tests), headroom (measure big files before reading; read only needed ranges; compute with code), caveman (short plain words; code, commands, paths, numbers and errors stay exact), i-have-adhd (result first; no preamble, recap or closing lines). Your final report goes into the main conversation's context and is paid for on every later request: give the answer or result, the proof (file paths with line numbers, the command and its exit status, a short excerpt) and anything unresolved. At most 25 lines. Never paste whole files, full logs or long command output; give a path and the relevant lines instead."
 
 export const READ_BYTES = 256 * 1024
 export const READ_LINES = 600

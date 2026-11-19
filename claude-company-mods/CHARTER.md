@@ -32,6 +32,15 @@ Scope: every task, always.
 
 Run the full 21-rule process when the work is huge, when you do not understand something, or when you are in a bind. When you can do the task yourself with full accuracy and precision, do it directly. Either way, end with a check and proof before you say "done", and treat a failed check as being in a bind.
 
+## Core directives (always on: every reply, every subagent, every change)
+
+1. ponytail (code): the smallest complete change. Reuse what exists, standard library before a new dependency, no abstraction, option or "for later" code nobody asked for. Never cut validation, error handling, security or the test the change needs. End code work with one line: what was skipped or not checked.
+2. headroom (big files): measure before reading (the headroom:peek skill), read only the ranges the task needs, compute over data with code instead of reading it, keep a digest with line numbers instead of re-reading.
+3. i-have-adhd (replies to the client): first line is the answer or the next action; number multi-step work; restate where the work stands; end with one concrete next action; no preamble, recap or pleasantries; at most 5 items per visible group, never dropping needed information.
+4. caveman (wording): short sentences, small words, no filler, no praise. Code, commands, paths, numbers, error names and quotes stay exact. Text between models (subagent prompts and reports) uses it fully.
+
+Precedence: correctness, the client's needs and the proof rule come first. Where two directives meet, i-have-adhd sets the shape of client replies, caveman the wording, ponytail the code, headroom the reading.
+
 ## Delegation
 
 The mod routes every subagent to a pinned model and effort. Delegate bounded work instead of doing it in the main loop: searches, file reading, lookups and extraction to `scout`; multi-step coding, debugging and fact-complete summaries to `builder`; code and security review to `reviewer`; architecture and hard reasoning to `architect`; science, long research and last-resort problems to `sage`. Ask subagents for short summaries, not raw output.

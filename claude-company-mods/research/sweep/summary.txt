@@ -1,0 +1,46 @@
+pid  category                       haiku                    | sonnet                   | opus                     | fable                   
+                                    low  medi high xhig max  | low  medi high xhig max  | low  medi high xhig max  | low  medi high xhig max 
+p01  code: implement spec           .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .   
+p02  code: debug 6 bugs             .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .   
+p03  code: multi-file root cause    .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .   
+p04  code: performance              .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .   
+p05  code review + security         100  100  100  .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p06  logic puzzle                   100  100  100  .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p07  probability                    100  100  .    .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p08  scheduling                     100  100  100  .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p09  trick questions                100  100  100  .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p10  strict format                  100  90   100  .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p11  long-context retrieval         100  100  .    .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p12  extraction                     100  100  100  .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p13  classification                 100  100  100  .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p14  summarisation                  92   83   .    .    83   | 100  .    .    .    .    | 100  .    .    .    .    | 83   92   .    .    .   
+p15  analytical judgment            100  100  100  .    100  | 67   100  .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p16  honesty / hallucination        90   90   90   .    90   | 90   90   .    .    90   | 90   90   .    .    90   | 90   90   .    .    90  
+p17  hard math                      100  100  100  .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p19  long-horizon multi-file featur .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .   
+p20  frontend build                 100  100  .    .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p21  data analysis                  .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .   
+p22  SQL                            100  100  .    .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p23  constrained writing            100  92   .    .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+p24  vision: charts/tables/diagrams .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .   
+p25  test writing (mutation)        .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .   
+p26  spec-vs-test judgment          .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .   
+p27  CLI tool use                   .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .    | .    .    .    .    .   
+p28  localisation                   100  100  100  .    100  | 92   0    92   .    100  | 100  .    .    .    .    | 100  .    .    .    .   
+p29  capacity planning              100  100  100  .    100  | 100  .    .    .    .    | 100  .    .    .    .    | 100  .    .    .    .   
+
+model  effort  runs  mean_score  cost$   mean_out  mean_think  mean_wall_s
+haiku  low      18     0.990    0.05      3489      3130      18.6
+haiku  medium   18     0.975    0.04      3959      3600      20.4
+haiku  high     12     0.992    0.03      4357      4043      22.5
+haiku  max      18     0.985    0.19     20744     20317      80.4
+sonnet low      18     0.971    0.60      1227       916      12.1
+sonnet medium    3     0.633    0.03       495        99       6.9
+sonnet high      1     0.917    0.01       298         0       5.7
+sonnet max       2     0.950    0.11      5330      5026      38.4
+opus   low      18     0.994    1.10       931       602      13.8
+opus   medium    1     0.900    0.01       256         0       7.7
+opus   max       1     0.900    0.07      3121      2797      32.7
+fable  low      18     0.985    2.34      1142       749      13.9
+fable  medium    2     0.908    0.06       358        76       7.4
+fable  max       1     0.900    0.09      1772      1471      21.1

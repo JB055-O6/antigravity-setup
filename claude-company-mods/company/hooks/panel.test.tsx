@@ -27,7 +27,7 @@ function setup(on: On, opts: { five?: number; week?: number; placed?: boolean } 
   })
   // Like the person's account: ponytail and i-have-adhd in settings, caveman and headroom synced.
   on('settings.read', () => ({ value: { enabledPlugins: { 'ponytail@ponytail': true, 'i-have-adhd@i-have-adhd': true } } }))
-  on('fs.read', () => ({ value: '{"version":"0.10.1"}' }) as never)
+  on('fs.read', () => ({ value: '{"version":"0.10.2"}' }) as never)
   on('ui.toast', () => ({ value: undefined }))
   on('ui.status', () => ({ value: undefined }))
   on('command.list', () => ({
@@ -66,7 +66,7 @@ test('desktop: pane opens; blocks show ACTIVE, the route, and the crew run from 
   expect(opened).toContain('company')
   await $.agent.spawn(SPAWN as never)
   let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.find({ type: 'Text', text: /ACTIVE: all 7 parts on/ }))?.text).toContain('company 0.10.1')
+  expect((await ui.find({ type: 'Text', text: /ACTIVE: all 7 parts on/ }))?.text).toContain('company 0.10.2')
   expect(await ui.find({ type: 'Text', text: /Explore → haiku medium/ })).toBeTruthy()
   expect(await ui.find({ type: 'Text', text: /▶ running Explore on haiku medium, 0 steps: Find where the config is loaded/ })).toBeTruthy()
   expect(await ui.find({ type: 'Text', text: /caveman ON/ })).toBeTruthy()
@@ -90,10 +90,12 @@ test('/company prints every block and says why the pane is not shown', async ($,
   setup(on, { five: 40, week: 20, placed: false })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const r = await $.command.run({ command: 'company', args: '' } as never)
-  for (const b of ['CHARTER', 'ROUTER', 'GOVERNOR', 'METER', 'DIET', 'CREW', 'DIRECTIVES']) expect(r.text).toContain(`[✓ ${b}]`)
-  expect(r.text).toContain('Panel: not shown here (no-surface: none attached)')
-  expect(r.text).toContain('Limits: 5-hour 40% · week 20%')
-  expect(r.text).toContain('caveman ON')
+  for (const b of ['CHARTER', 'ROUTER', 'GOVERNOR', 'METER', 'DIET', 'CREW', 'DIRECTIVES']) expect(r.text).toContain(`✓ ${b.padEnd(11)}`)
+  expect(r.text).toContain('COMPANY 0.10.2 · ACTIVE · all 7 parts on')
+  expect(r.text).toContain('  scout     haiku · medium  find, read, look up')
+  expect(r.text).toContain('Panel: not available here (no-surface). Live actions show as "company ·" lines in the chat.')
+  expect(r.text).toContain('5h 40% · week 20% · economy off')
+  expect(r.text).toContain('ponytail · i-have-adhd · headroom · caveman')
 })
 
 test('no pane on screen: each action posts one company notice to the chat', async ($, on) => {
@@ -102,7 +104,7 @@ test('no pane on screen: each action posts one company notice to the chat', asyn
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.agent.spawn(SPAWN as never)
   await $.tool.call({ tool: 'Agent', tool_use_id: 'tu1', description: 'x', prompt: 'x' } as never)
-  expect(notices.some((n) => n.startsWith('company · COMPANY · company 0.10.1 on'))).toBe(true)
+  expect(notices.some((n) => n.startsWith('company · COMPANY · company 0.10.2 on'))).toBe(true)
   expect(notices).toContain('company · ROUTER · Explore → haiku medium (Explore is read-only search)')
   expect(notices).toContain('company · DIET · subagent told to report in 25 lines or less')
   expect(notices).toContain('company · CREW · Explore done: Find where the config is loaded')

@@ -271,3 +271,7 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 - Client /company: "Panel: not shown here (no-surface: no surface is attached ($.session.surfaces() is empty))". Cause proven: this cloud session has no attached surface; the desktop app shows only the transcript. No mod pane can draw here.
 - Fix: when no pane is placed, each logged action is posted as a system notice via $.session.append (model never reads notices: no token cost). Labels: COMPANY, ROUTER, GOVERNOR, METER, DIET, CREW. No notices while a pane is placed.
 - 148/148 tests, tsc 0, validate pass. Not proven live: that the desktop app shows the notices of a remote session.
+
+## 2026-11-19: 0.10.2 report layout; limits bug fixed
+- /company report redesigned: header card, one aligned line per part, crew roster with short roles, live runs, last 6 actions, panel line.
+- Manager defect (rule 19): an empty usage reading wiped the last known limits ("5-hour 38%" then "no data yet"). Fix: merge each reading into the last known windows. Tests added (merge; API-key session still shows none). 149/149, tsc 0.

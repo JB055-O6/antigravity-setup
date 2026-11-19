@@ -1,6 +1,6 @@
 {
   "name": "company",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "Automatic token thrift under four core directives (ponytail, headroom, i-have-adhd, caveman): routes subagents to the cheapest fitting model and effort, governs wasteful effort, meters limits with economy mode, keeps the main context small, and loads the client charter.",
   "types": "./types/index.d.ts"
 }

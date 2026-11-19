@@ -319,7 +319,20 @@ test('status: normal mode with windows, and without (API key)', async ($, on) =>
   expect(statuses[statuses.length - 1]).toBe(
     'company · 5h 23% · week 7% · 0 subagents routed · 0 efforts governed',
   )
+  // An empty reading later keeps the last known windows (see the meter test below).
   await $.session.measure({ context: { window: 1 }, rateLimits: [], changed: ['rateLimits'] } as never)
+  expect(statuses[statuses.length - 1]).toBe('company · 5h 23% · week 7% · 0 subagents routed · 0 efforts governed')
+})
+
+test('status: API key session (never any window) shows no limits', async ($, on) => {
+  quiet(on)
+  const statuses: Array<string | undefined> = []
+  on('ui.status', (_, e) => {
+    statuses.push(e.text)
+    return { value: undefined }
+  })
+  usageAt(on, null)
+  await $.session.start({ ...START })
   expect(statuses[statuses.length - 1]).toBe('company · 0 subagents routed · 0 efforts governed')
 })
 
@@ -367,8 +380,7 @@ test('/company: registered at start; running it boots again and reports what is 
   await $.session.start({ ...START })
   expect(cmds).toContain('company')
   const r = await $.command.run({ command: 'company', args: '' } as never)
-  expect(r.text).toContain('[✓ CHARTER]')
-  expect(r.text).toContain('5/5 helpers ready')
-  expect(r.text).toContain('5-hour 40% · week 20%')
-  expect(r.text).toContain('Economy: off')
+  expect(r.text).toContain('✓ CHARTER')
+  expect(r.text).toContain('5/5 ready')
+  expect(r.text).toContain('5h 40% · week 20% · economy off')
 })

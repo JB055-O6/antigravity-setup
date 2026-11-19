@@ -93,12 +93,41 @@ export function headline(p: Panel): string {
   return all ? `● company ${p.version} ACTIVE: all 7 parts on` : `● company ${p.version}: a part needs attention`
 }
 
-// The same blocks as plain text, for /company.
+// The /company report: a summary card, then the crew, then recent actions.
 export function panelText(p: Panel, placed: string): string {
+  const blocks = panelBlocks(p)
+  const all = blocks.every((b) => b.ok)
+  const bar = '━'.repeat(44)
+  const thin = '─'.repeat(44)
+  const limits =
+    p.fiveHour === undefined && p.week === undefined
+      ? 'limits: waiting for data'
+      : `5h ${Math.round(p.fiveHour ?? 0)}% · week ${Math.round(p.week ?? 0)}%`
+  const running = p.runs.filter((r) => r.status === 'running').length
+  const summary: [string, boolean, string][] = [
+    ['CHARTER', true, '21 rules + 4 directives in every request'],
+    ['ROUTER', true, `${p.routed} subagents sent to the cheapest fit`],
+    ['GOVERNOR', true, `${p.governed} effort fixes · no Fable`],
+    ['METER', true, `${limits} · economy ${p.economy ? 'ON (max → xhigh)' : 'off'}`],
+    ['DIET', true, `${p.diet} cuts to keep the context small`],
+    ['CREW', p.crew === p.crewTotal, `${p.crew}/${p.crewTotal} ready · ${running} running`],
+    ['DIRECTIVES', blocks[6]!.ok, p.directives.length ? p.directives.map((d) => (d.on ? d.name : `${d.name} OFF`)).join(' · ') : 'checking'],
+  ]
+  const recent = p.log.filter((l) => l.kind !== 'start').slice(-6)
   return [
-    headline(p),
+    bar,
+    ` COMPANY ${p.version} · ${all ? 'ACTIVE · all 7 parts on' : 'CHECK · a part needs attention'}`,
+    bar,
+    ...summary.map(([n, ok, t]) => `${ok ? '✓' : '✗'} ${n.padEnd(11)}${t}`),
+    thin,
+    'CREW',
+    ...p.roster.map((r) => `  ${r.name.padEnd(10)}${`${r.model} · ${r.effort}`.padEnd(16)}${r.does}`),
+    ...p.runs.slice(-5).map((r) => `  ${r.status === 'running' ? '▶' : r.status === 'done' ? '✓' : r.status === 'failed' ? '✗' : '◆'} ${r.type} · ${r.model} ${r.effort} · ${r.steps} steps · ${r.task}`),
+    thin,
+    'RECENT',
+    ...(recent.length ? recent.map((l) => `  #${l.n} ${l.kind.toUpperCase().padEnd(9)}${l.text}`) : ['  nothing yet']),
+    thin,
     placed,
-    ...panelBlocks(p).map((b) => [`[${b.ok ? '✓' : '✗'} ${b.name}] ${b.what}`, ...b.lines.map((l) => `   ${l}`)].join('\n')),
   ].join('\n')
 }
 

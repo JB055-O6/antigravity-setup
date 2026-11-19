@@ -23,6 +23,7 @@ const COMMON =
 const CREW = [
   {
     name: 'scout',
+    role: 'find, read, look up',
     model: 'haiku',
     effort: 'medium',
     tools: ['Read', 'Glob', 'Grep', 'Bash', 'WebFetch', 'WebSearch'],
@@ -32,6 +33,7 @@ const CREW = [
   },
   {
     name: 'builder',
+    role: 'write code, fix bugs, tests',
     model: 'sonnet',
     effort: 'medium',
     tools: undefined,
@@ -41,6 +43,7 @@ const CREW = [
   },
   {
     name: 'reviewer',
+    role: 'review code and security',
     model: 'opus',
     effort: 'max',
     tools: ['Read', 'Glob', 'Grep', 'Bash'],
@@ -50,6 +53,7 @@ const CREW = [
   },
   {
     name: 'architect',
+    role: 'design, hard problems',
     model: 'opus',
     effort: 'xhigh',
     tools: undefined,
@@ -59,6 +63,7 @@ const CREW = [
   },
   {
     name: 'sage',
+    role: 'last resort, hardest problems',
     model: 'opus',
     effort: 'max',
     tools: undefined,
@@ -116,7 +121,7 @@ function showStatus($: EngineInterface, st: MeterState) {
     version: st.version,
     crew: st.crew,
     crewTotal: CREW.length,
-    roster: CREW.map((a) => ({ name: a.name, model: a.model, effort: a.effort, does: a.description.split(/[.:]/)[0] ?? '' })),
+    roster: CREW.map((a) => ({ name: a.name, model: a.model, effort: a.effort, does: a.role })),
     directives: st.dirs,
     ...(st.windows.fiveHour !== undefined ? { fiveHour: st.windows.fiveHour } : {}),
     ...(st.windows.week !== undefined ? { week: st.windows.week } : {}),
@@ -198,7 +203,8 @@ async function applyLimits(
   limits: Parameters<typeof readWindows>[0],
 ) {
   try {
-    const w = readWindows(limits)
+    // A reading without a window keeps the last known value of that window.
+    const w = { ...st.windows, ...readWindows(limits) }
     const was = st.economy
     st.windows = w
     st.economy = nextEconomy(was, w)
@@ -272,9 +278,11 @@ export const register: Register = (on, options) => {
     try {
       const o = await $.ui.open({ id: PANE_ID, title: 'Company' })
       st.paneShown = o.isPlaced
-      placed = o.isPlaced ? 'Panel: shown.' : `Panel: not shown here (${o.reason}). This report has the same blocks; each action also shows as a "company ·" line in the chat.`
+      placed = o.isPlaced
+        ? 'Panel: shown.'
+        : `Panel: not available here (${String(o.reason).split(':')[0]}). Live actions show as "company ·" lines in the chat.`
     } catch (err) {
-      placed = `Panel: refused (${String(err).slice(0, 120)}). This report has the same blocks.`
+      placed = `Panel: refused (${String(err).slice(0, 120)}). Live actions show as "company ·" lines in the chat.`
     }
     return { text: panelText(await read($, panel), placed) }
   })

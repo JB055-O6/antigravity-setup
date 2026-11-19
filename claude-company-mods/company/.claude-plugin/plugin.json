@@ -1,6 +1,6 @@
 {
   "name": "company",
-  "version": "0.1.0",
-  "description": "Runs every job under the client charter: gates, live board, pinned workers.",
+  "version": "0.2.0",
+  "description": "Automatic model routing for subagents (cheapest fitting model and effort) plus the client charter in every session.",
   "types": "./types/index.d.ts"
 }

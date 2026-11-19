@@ -1,12 +1,13 @@
 # Company mod report (caveman)
 
-Date: 2026-11-19. Mod: `company` 0.8.0.
+Date: 2026-11-19. Mod: `company` 0.9.1.
 
 ## Short answer
 
 - Mod built. Mod tested. Mod packaged.
-- Mod cut subagent cost 54% in one live test.
-- Not all done. Two test sets still wait.
+- 22 live runs. All 22 answers right, with mod and without.
+- Mod cut total cost 17% in round 2. Subagent work: 42-54% cheaper.
+- All tests done. Fable runs dropped (cost credits).
 
 ## What we want
 
@@ -47,7 +48,7 @@ Source: `research/sweep/summary.txt`, `research/sweep/agent_results.jsonl`.
 - 131 text runs. All four models. $4.73 list price. (Research doc say 137: that count add 6 Haiku tool runs.)
 - All models score near 100% at low effort. More effort = more time, not more score.
 - Cost per text run at low effort: Haiku $0.003. Sonnet $0.033. Opus $0.061. Fable $0.130.
-- 13 tool runs. Sonnet low: 6 of 6 pass. Haiku low: 5 of 6 pass. Haiku miss one CLI sum (256,068 vs 1,236,588). Haiku medium redo: pass.
+- 19 tool runs. Opus low: 6 of 6 pass, $0.84 for all six (`research/sweep/opus-low-tool-results.txt`). Sonnet low: 6 of 6 pass. Haiku low: 5 of 6 pass. Haiku miss one CLI sum (256,068 vs 1,236,588). Haiku medium redo: pass.
 - Weak spot: tests too easy. They not rank top models. They only show floor and cost.
 
 ## What mod do
@@ -82,10 +83,10 @@ All automatic. No command. No gate. Never block work.
 
 | Claim | Proof | How sure |
 |---|---|---|
-| Code right | `claude plugin test`: 141 pass, 0 fail (0.8.0; 140 in check file for 0.7.0) | Run today, `measure/checks-2026-11-19.txt` |
-| Mod load OK | `claude plugin validate`: pass (warnings: no author, no icon) | Same file |
+| Code right | `claude plugin test`: 145 pass, 0 fail (0.9.1) | Run today, `measure/checks-0.9.1.txt` |
+| Mod load OK | `claude plugin validate`: pass (warnings only) | Same file |
 | Types clean | `tsc` exit 0 | Same file |
-| On GitHub | local HEAD = remote | Same file |
+| On GitHub | local HEAD = remote | `measure/checks-2026-11-19.txt` (0.7.0); each push since, git output |
 | Router work live | Live run: subagent served by Haiku | Live |
 | Grep cap work live | Live run: 6,000 matches cut to 200 (`PROJECT.md`) | Live |
 | Crew live | `company:scout` etc. show in agent list | Live |
@@ -105,6 +106,22 @@ What it mean:
 - Mod add about 3,600 input tokens per 2-request task, so about 1,800 per request (charter + crew). Cost about $0.003 on small tasks with no subagent.
 - Read cap and Grep cap not fire in these tasks. Opus already read small.
 
+Live test, round 2. Mod 0.9.x (same code as 0.9.1). Two runs each. Plus bug-fix task: fix `calc.py` so its test pass. Hash check prove test file not touched. Setup: `measure/run2.sh`. Result: `measure/r2-results.txt` (mean of 2 runs).
+
+| Task | Stock | Mod | Change | Right answer? |
+|---|---|---|---|---|
+| Subagent lookup | $0.205 | $0.118 | −42% | 4 of 4 yes |
+| Line 4500 of big file | $0.093 | $0.091 | −3% | 4 of 4 yes |
+| Count lines with "7" | $0.087 | $0.090 | +3% | 4 of 4 yes |
+| Fix bug in code | $0.109 | $0.113 | +4% | 4 of 4 yes |
+| **All 16 runs** | **$0.989** | **$0.824** | **−17%** | **16 of 16** |
+
+What it mean:
+
+- Same pattern two rounds. Router save big. Fixed overhead cost 3-4% on small solo tasks.
+- Work with subagents: mod win. Tiny solo task: mod lose a little.
+- Quality same: no wrong answer anywhere.
+
 ## Not proven (honest)
 
 1. **Effort changes live.** Logs not show effort. Only tests prove.
@@ -112,13 +129,12 @@ What it mean:
 3. **Sync to all devices.** Proven: account plugins load in cloud sessions (this one did). Not proven: desktop app, terminal on your PC.
 4. **Fable billing change.** You said. Me not check.
 5. **Real limit cost per model.** Nobody publish it. Me use API price as stand-in.
-6. **Big saving number.** Round 1 = 3 tasks, 1 run each. Show direction. Not firm percent.
+6. **Big saving number.** 22 runs, small tasks. −17% hold for this mix only. Real mix with more subagents save more; mix with none lose 3-4%.
+7. **Panel in desktop app.** Test draw it. Not seen on real screen.
 
-## Not done yet
+## Not done
 
-1. Live test round 2: code edit task, 2 runs each. Set for 09:05 UTC (5-hour limit was 89%).
-2. Six Opus tool runs. Same time.
-3. Three Fable runs: dropped. Would cost credits.
+1. Three Fable runs: dropped. Would cost credits.
 
 ## Mistakes on record (rule 19)
 
@@ -129,6 +145,8 @@ All by manager (me). All fixed.
 3. First diet live proof used a limit, so proved nothing. Redone with Grep: real proof.
 4. New file missed type check once (`directives.ts`). Fixed before ship.
 5. Old test expected Fable kept after the no-Fable change. Test fixed.
+6. Directives check said caveman, headroom missing. They were on (account-synced plugins not in settings list). Fixed: also read loaded plugins. Test added.
+7. Package 0.9.0 said version 0.6.0 inside (old manifest copied over). Code was right. Fixed: 0.9.1, version checked inside zip.
 
 ## Files
 
@@ -140,4 +158,4 @@ All by manager (me). All fixed.
 
 ## Next
 
-Wait 09:05 UTC. Round 2 run. Me add numbers here.
+Save 0.9.1. Open new desktop session. Check panel say `ACTIVE: all 7 parts on`.

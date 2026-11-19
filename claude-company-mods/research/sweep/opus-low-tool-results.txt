@@ -1,0 +1,6 @@
+p19 1.0 0.3203 13 {'score': 20, 'total': 20, 'fails': []}
+p21 1.0 0.0893 5 {'ok': [True, True, True, True, True, True], 'got': {'q1': 1415, 'q2': 1341245.22, 'q3': 'US', 'q4': '2026-05'
+p24 1.0 0.0535 6 {'ok': [True, True, True, True, True, True, True]}
+p25 1.0 0.1746 6 {'killed': [True, True, True, True, True, True, True, True, True, True]}
+p26 1.0 0.0681 7 {'bug_fixed': True, 'spec_kept': True, 'tests_follow_spec': True}
+p27 1.0 0.1369 11 {'ok': [True, True], 'got': {'total_cents': 1236588, 'pages': 7}}

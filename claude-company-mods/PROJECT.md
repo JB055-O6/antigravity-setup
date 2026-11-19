@@ -253,3 +253,9 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 - Live pane "Company": opens by itself on desktop at session start; /company opens it anywhere. Shows 7 parts (charter, router, governor, meter, diet, crew, directives) with ✓/✗, live counters, economy explained, last 12 actions (routes, effort fixes deduped, diet cuts, economy on/off).
 - 145/145 tests, tsc 0, validate pass. Not proven live: pane drawing in the real desktop app.
 - Windows settings line: cannot reach client PC (cloud session; ~/.claude is a hidden folder, not attachable). PowerShell command given, untested (pwsh download blocked by safety check).
+
+## 2026-11-19 09:15 UTC: measurement done; 0.9.1
+- r2 (16 runs, n=2, mod 0.9.x code): 16/16 correct. Stock $0.989, mod $0.824 (-16.7%). Lookup -42.5%, big-line -2.9%, count +3.2%, bug fix +4.0%.
+- Held bench: Opus low on 6 tool tasks, headless, no user settings: 6/6 (p19 20/20, p21 6/6, p24 7/7, p25 10/10 mutants, p26 3/3, p27 2/2), $0.8427 total. Fable x3 dropped (credits).
+- Manager defect (rule 19): 0.9.0 package carried version 0.6.0 (W manifest copied over M). Fixed as 0.9.1 in M, W and repo; version read from inside the zip.
+- Report updated; all queue items closed.

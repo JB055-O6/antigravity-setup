@@ -1,6 +1,9 @@
+import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
+import type { Panel } from '../types'
+import { EMPTY_PANEL, PANE_ID, PanelView } from './panel'
 import { CHARTER } from './charter'
-import { directivesNote } from './directives'
+import { directiveState, directivesNote } from './directives'
 import { GREP_LINES, READ_LINES, dietPrompt, dietTotal, readNote, recordDiet, shouldCapRead } from './diet'
 import { routeSpawn, type Route } from './router'
 import {
@@ -71,6 +74,21 @@ type MeterState = {
   economySince?: number
   routedTotal: number
   directives?: string
+  dirs: { name: string; on: boolean }[]
+  crew: number
+  version: string
+  log: Panel['log']
+  seq: number
+  lastGov?: string
+}
+
+// Change the tag when Panel's fields change: it declines what an older version stored.
+const panel = atom({ plugin: 'company', key: 'panel' } as const, EMPTY_PANEL, { shape: 'panel-1' })
+
+// One line in the pane's activity list (last 12 kept).
+function note(st: MeterState, kind: string, text: string) {
+  st.seq += 1
+  st.log = [...st.log, { n: st.seq, kind, text }].slice(-12)
 }
 
 function showStatus($: EngineInterface, st: MeterState) {
@@ -87,6 +105,20 @@ function showStatus($: EngineInterface, st: MeterState) {
   } catch {
     // The line is best-effort.
   }
+  // The pane redraws from this snapshot.
+  void update($, panel, () => ({
+    version: st.version,
+    crew: st.crew,
+    crewTotal: CREW.length,
+    directives: st.dirs,
+    ...(st.windows.fiveHour !== undefined ? { fiveHour: st.windows.fiveHour } : {}),
+    ...(st.windows.week !== undefined ? { week: st.windows.week } : {}),
+    economy: st.economy,
+    routed: st.routedTotal,
+    governed: governedTotal(),
+    diet: dietTotal(),
+    log: st.log,
+  })).catch(() => {})
 }
 
 // Everything a session needs, run at start and again by /company in a live session.
@@ -107,11 +139,31 @@ async function boot($: EngineInterface, st: MeterState): Promise<number> {
       // One agent failing to register must not stop the others or the session.
     }
   }
+  st.crew = crew
+  let enabled: unknown
+  let loaded: string[] = []
   try {
-    st.directives = directivesNote(await $.settings.read({ key: 'enabledPlugins' }))
+    enabled = await $.settings.read({ key: 'enabledPlugins' })
   } catch {
-    // Unknown: leave the note off. The built-in directives still apply.
+    // Unknown: the command list below may still tell.
   }
+  try {
+    loaded = (await $.command.list()).map((c) => c.plugin ?? (c.name.includes(':') ? (c.name.split(':')[0] ?? '') : '')).filter(Boolean)
+  } catch {
+    // Unknown: settings alone decide.
+  }
+  // Both reads failed: unknown, so show nothing rather than a false "0/4".
+  if (enabled !== undefined || loaded.length) {
+    st.dirs = directiveState(enabled, loaded)
+    st.directives = directivesNote(enabled, loaded)
+  }
+  try {
+    const v = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: string }
+    if (typeof v.version === 'string') st.version = v.version
+  } catch {
+    // The version is only shown.
+  }
+  note(st, 'start', `company ${st.version} on: charter, router, governor, meter, diet, crew ${crew}/${CREW.length}, ${st.directives}`)
   try {
     await applyLimits($, st, (await $.session.usage()).rateLimits)
   } catch {
@@ -132,6 +184,7 @@ async function applyLimits(
     st.windows = w
     st.economy = nextEconomy(was, w)
     if (st.economy !== was) {
+      note(st, 'meter', st.economy ? `economy ON at 5h ${Math.round(w.fiveHour ?? 0)}% · week ${Math.round(w.week ?? 0)}%` : 'economy off')
       try {
         if (st.economy) {
           const five = w.fiveHour ?? 0
@@ -173,10 +226,12 @@ export const register: Register = (on, options) => {
   let routedTotal = 0
   let fableWarned = false
   // Limit meter state; `st.economy` is read synchronously by turn.step.
-  const st: MeterState = { windows: {}, economy: false, routedTotal: 0 }
+  const st: MeterState = { windows: {}, economy: false, routedTotal: 0, dirs: [], crew: 0, version: '', log: [], seq: 0 }
 
   on('session.start', async ($, e, next) => {
     await boot($, st)
+    // The live pane opens by itself on the desktop app; /company opens it anywhere.
+    if (e.surface === 'desktop') void $.ui.open({ id: PANE_ID, title: 'Company' }).catch(() => {})
     try {
       await $.command.register({
         name: 'company',
@@ -191,6 +246,8 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'company' }, async ($) => {
     const crew = await boot($, st)
+    showStatus($, st)
+    void $.ui.open({ id: PANE_ID, title: 'Company' }).catch(() => {})
     const w = st.windows
     const limits = w.fiveHour === undefined && w.week === undefined ? 'limits: no data' : `5h ${w.fiveHour ?? '?'}% · week ${w.week ?? '?'}%`
     return {
@@ -244,6 +301,7 @@ export const register: Register = (on, options) => {
       if (!result.deny) {
         if (prompt !== null) {
           recordDiet('report')
+          note(st, 'diet', 'subagent told to report in 25 lines or less')
           if (!route) showStatus($, st)
         }
         if (route) {
@@ -269,6 +327,7 @@ export const register: Register = (on, options) => {
             // The tally is best-effort.
           }
           st.routedTotal = total
+          note(st, 'route', `${e.subagentType ?? 'subagent'} → ${route.model} ${route.effort} (${route.reason})`)
           showStatus($, st)
         }
       }
@@ -294,6 +353,7 @@ export const register: Register = (on, options) => {
     try {
       if (result.deny !== undefined || result.isError) return result
       recordDiet('read')
+      note(st, 'diet', `big file read capped at ${READ_LINES} lines (${Math.round(size / 1024)} KB)`)
       showStatus($, st)
       return { ...result, context: [...(result.context ?? []), readNote(size)] }
     } catch {
@@ -308,6 +368,7 @@ export const register: Register = (on, options) => {
     try {
       if (result.deny === undefined && !result.isError) {
         recordDiet('grep')
+        note(st, 'diet', `search output capped at ${GREP_LINES} lines`)
         showStatus($, st)
       }
     } catch {
@@ -349,6 +410,13 @@ export const register: Register = (on, options) => {
       }
       if (rerouted) out = { ...e, model, effort }
       else if (effort !== e.effort) out = { ...e, effort }
+      // Log a fix once per kind, not on every step.
+      const why = rerouted ? 'subagent Fable → Opus (no usage credits)' : g.changed ? g.reason : undefined
+      if (why && why !== st.lastGov) {
+        st.lastGov = why
+        note(st, 'governor', why)
+        showStatus($, st)
+      }
     } catch {
       out = e
     }
@@ -368,5 +436,11 @@ export const register: Register = (on, options) => {
       // Not a guard: never block the prompt over the charter.
       return result
     }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: 'company' }, async ($, e) => {
+    const ui = $.ui.resolve(e)
+    const p = await read($, panel)
+    return PanelView(ui, p, Math.max(3, (e.viewport?.rows ?? 30) - 12))
   })
 }

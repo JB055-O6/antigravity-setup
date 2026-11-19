@@ -15,4 +15,6 @@ Run first, above every other plugin (once per device). Add this line to your use
 
 Already open session: run `/reload-plugins` if the mod is new there, then `/company`. `/company` starts everything again and shows what is on.
 
+Live panel: opens by itself in the desktop app; `/company` opens it anywhere. Shows all 7 parts (charter, router, governor, meter, diet, crew, directives) and recent activity.
+
 Status line: `company · 5h n% · week n% · k subagents routed · g efforts governed · n diet · directives n/4`.

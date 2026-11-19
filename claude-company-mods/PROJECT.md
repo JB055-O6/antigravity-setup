@@ -247,3 +247,9 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 - Load first: user settings `"prependPlugins": ["company@synced"]`. Proof (debug log, this container): "hooks module company@synced loaded (worker, environment 5, tier prepend)". `--settings` flag does NOT do it (stayed tier user). No API lets the mod write settings, so the line is set once per device. Container settings restored after probe.
 - /company (immediate): runs boot again (crew, directives check, limits) and prints what is on. Test added; 141/141, tsc 0, validate pass.
 - Not proven live: /company typed in a real session; that session.start runs after /reload-plugins.
+
+## 2026-11-19: 0.9.0 live panel; directives bug fixed
+- Client ran /company: "directives 2/4, missing headroom, caveman". Manager defect (rule 19): check read only settings enabledPlugins; account-synced plugins are not listed there. Fix: also read $.command.list() plugin names. Unknown (both reads fail) shows nothing, not 0/4. Test added.
+- Live pane "Company": opens by itself on desktop at session start; /company opens it anywhere. Shows 7 parts (charter, router, governor, meter, diet, crew, directives) with ✓/✗, live counters, economy explained, last 12 actions (routes, effort fixes deduped, diet cuts, economy on/off).
+- 145/145 tests, tsc 0, validate pass. Not proven live: pane drawing in the real desktop app.
+- Windows settings line: cannot reach client PC (cloud session; ~/.claude is a hidden folder, not attachable). PowerShell command given, untested (pwsh download blocked by safety check).

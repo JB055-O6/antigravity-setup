@@ -1,6 +1,6 @@
 # Company mod report (caveman)
 
-Date: 2026-11-19. Mod: `company` 0.7.0. Commit: `9058b1a`.
+Date: 2026-11-19. Mod: `company` 0.8.0.
 
 ## Short answer
 
@@ -73,11 +73,16 @@ All automatic. No command. No gate. Never block work.
 5. **Four rules.** Charter load in every session. Short rule block go in every subagent. Status show `directives n/4` (which of four plugins on).
 6. **Crew.** Five worker types: scout (Haiku medium), builder (Sonnet medium), reviewer (Opus max), architect (Opus xhigh), sage (Opus max).
 
+## Load first, one command (0.8.0)
+
+- One line in user settings put `company` first, above all plugins: `"prependPlugins": ["company@synced"]`. Proof: debug log say `company@synced loaded (... tier prepend)`. One time per device. Mod cannot write settings itself.
+- `/company`: start all again in open session. Show what on. Session where mod new: `/reload-plugins` first.
+
 ## Proof
 
 | Claim | Proof | How sure |
 |---|---|---|
-| Code right | `claude plugin test`: 140 pass, 0 fail | Run today, `measure/checks-2026-11-19.txt` |
+| Code right | `claude plugin test`: 141 pass, 0 fail (0.8.0; 140 in check file for 0.7.0) | Run today, `measure/checks-2026-11-19.txt` |
 | Mod load OK | `claude plugin validate`: pass (warnings: no author, no icon) | Same file |
 | Types clean | `tsc` exit 0 | Same file |
 | On GitHub | local HEAD = remote | Same file |

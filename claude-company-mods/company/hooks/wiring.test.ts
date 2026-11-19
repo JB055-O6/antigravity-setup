@@ -354,3 +354,21 @@ test('no credits: outside economy a fable subagent step goes out as opus max; ma
   expect(got[1]).toMatchObject({ model: 'fable', effort: 'high' })
   expect(toasts.filter(t => t.includes('usage credits'))).toHaveLength(1)
 })
+
+test('/company: registered at start; running it boots again and reports what is on', async ($, on) => {
+  quiet(on)
+  const cmds: string[] = []
+  on('command.register', (_, e) => {
+    cmds.push(e.name)
+    return { value: { command: e.name } }
+  })
+  on('settings.read', () => ({ value: { 'ponytail@p': true, 'i-have-adhd@a': true, 'headroom@s': true, 'caveman@s': true } }))
+  usageAt(on, 40, 20)
+  await $.session.start({ ...START })
+  expect(cmds).toContain('company')
+  const r = await $.command.run({ command: 'company', args: '' } as never)
+  expect(r.text).toContain('company on: charter, router, governor, meter, diet.')
+  expect(r.text).toContain('crew 5/5 registered')
+  expect(r.text).toContain('5h 40% · week 20%')
+  expect(r.text).toContain('economy off')
+})

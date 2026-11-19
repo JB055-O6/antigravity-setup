@@ -89,6 +89,37 @@ function showStatus($: EngineInterface, st: MeterState) {
   }
 }
 
+// Everything a session needs, run at start and again by /company in a live session.
+async function boot($: EngineInterface, st: MeterState): Promise<number> {
+  let crew = 0
+  for (const a of CREW) {
+    try {
+      await $.agent.register({
+        name: a.name,
+        description: a.description,
+        prompt: a.prompt,
+        model: a.model,
+        effort: a.effort,
+        ...(a.tools ? { tools: a.tools } : {}),
+      })
+      crew++
+    } catch {
+      // One agent failing to register must not stop the others or the session.
+    }
+  }
+  try {
+    st.directives = directivesNote(await $.settings.read({ key: 'enabledPlugins' }))
+  } catch {
+    // Unknown: leave the note off. The built-in directives still apply.
+  }
+  try {
+    await applyLimits($, st, (await $.session.usage()).rateLimits)
+  } catch {
+    showStatus($, st)
+  }
+  return crew
+}
+
 // Apply one reading of the rate-limit windows. Best-effort: never throws.
 async function applyLimits(
   $: EngineInterface,
@@ -145,31 +176,30 @@ export const register: Register = (on, options) => {
   const st: MeterState = { windows: {}, economy: false, routedTotal: 0 }
 
   on('session.start', async ($, e, next) => {
-    for (const a of CREW) {
-      try {
-        await $.agent.register({
-          name: a.name,
-          description: a.description,
-          prompt: a.prompt,
-          model: a.model,
-          effort: a.effort,
-          ...(a.tools ? { tools: a.tools } : {}),
-        })
-      } catch {
-        // One agent failing to register must not stop the others or the session.
-      }
-    }
+    await boot($, st)
     try {
-      st.directives = directivesNote(await $.settings.read({ key: 'enabledPlugins' }))
+      await $.command.register({
+        name: 'company',
+        description: 'Start or re-check the company mod in this session and show what is on',
+        immediate: true,
+      })
     } catch {
-      // Unknown: leave the note off. The built-in directives still apply.
-    }
-    try {
-      await applyLimits($, st, (await $.session.usage()).rateLimits)
-    } catch {
-      showStatus($, st)
+      // The command is a convenience; the mod works without it.
     }
     return next(e)
+  })
+
+  on('command.run', { command: 'company' }, async ($) => {
+    const crew = await boot($, st)
+    const w = st.windows
+    const limits = w.fiveHour === undefined && w.week === undefined ? 'limits: no data' : `5h ${w.fiveHour ?? '?'}% · week ${w.week ?? '?'}%`
+    return {
+      text: [
+        `company on: charter, router, governor, meter, diet.`,
+        `crew ${crew}/${CREW.length} registered · ${st.directives ?? 'directives: unknown'}`,
+        `${limits} · economy ${st.economy ? 'ON' : 'off'} · ${st.routedTotal} subagents routed · ${governedTotal()} efforts governed · ${dietTotal()} diet`,
+      ].join('\n'),
+    }
   })
 
   on('session.measure', async ($, e, next) => {

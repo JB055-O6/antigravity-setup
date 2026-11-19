@@ -241,3 +241,9 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 - Substitute evidence (AA index): Opus max 59, Fable high 62, Opus xhigh 57. Opus max is the strongest Pro-included setting.
 - Held bench runs: Fable x3 dropped (would spend credits). Opus x6 stay.
 - Not verified by me: the billing change itself (client's statement). 140/140 tests, tsc 0, validate pass.
+
+## 2026-11-19 06:05 UTC: 0.8.0 first-load and /company
+- Client: mod must run first in every session; one command to start it in an open session.
+- Load first: user settings `"prependPlugins": ["company@synced"]`. Proof (debug log, this container): "hooks module company@synced loaded (worker, environment 5, tier prepend)". `--settings` flag does NOT do it (stayed tier user). No API lets the mod write settings, so the line is set once per device. Container settings restored after probe.
+- /company (immediate): runs boot again (crew, directives check, limits) and prints what is on. Test added; 141/141, tsc 0, validate pass.
+- Not proven live: /company typed in a real session; that session.start runs after /reload-plugins.

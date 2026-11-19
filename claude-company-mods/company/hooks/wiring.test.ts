@@ -37,7 +37,7 @@ test('session.start registers the five crew agents', async ($, on) => {
   expect(by.builder).toMatchObject({ model: 'sonnet', effort: 'medium' })
   expect(by.reviewer).toMatchObject({ model: 'opus', effort: 'max' })
   expect(by.architect).toMatchObject({ model: 'opus', effort: 'xhigh' })
-  expect(by.sage).toMatchObject({ model: 'fable', effort: 'high' })
+  expect(by.sage).toMatchObject({ model: 'opus', effort: 'max' })
   expect(by.scout!.tools).toEqual(['Read', 'Glob', 'Grep', 'Bash', 'WebFetch', 'WebSearch'])
   expect(by.reviewer!.tools).toEqual(['Read', 'Glob', 'Grep', 'Bash'])
   expect(by.builder!.tools).toBeUndefined()
@@ -332,6 +332,25 @@ test('a throwing usage read changes nothing and blocks nothing', async ($, on) =
   const got = stepSink(on)
   const r = await $.session.start({ ...START })
   expect(r.cwd).toBe('/')
+  // Economy unknown: the no-credits reroute still applies (Opus max, not lowered).
   await step($, { agentId: 'x', model: 'fable', effort: 'high' })
-  expect(got[0]).toMatchObject({ model: 'fable', effort: 'high' })
+  expect(got[0]).toMatchObject({ model: 'opus', effort: 'max' })
+})
+
+test('no credits: outside economy a fable subagent step goes out as opus max; main-loop fable kept, toast once', async ($, on) => {
+  quiet(on)
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  usageAt(on, 10)
+  const got = stepSink(on)
+  await $.session.start({ ...START })
+  await step($, { agentId: 's1', model: 'claude-fable-5-2', effort: 'high' })
+  await step($, { model: 'fable', effort: 'high' })
+  await step($, { model: 'fable', effort: 'high' })
+  expect(got[0]).toMatchObject({ model: 'opus', effort: 'max' })
+  expect(got[1]).toMatchObject({ model: 'fable', effort: 'high' })
+  expect(toasts.filter(t => t.includes('usage credits'))).toHaveLength(1)
 })

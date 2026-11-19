@@ -134,7 +134,7 @@ test('routeSpawn: general-purpose by class', () => {
   expect(r('Fix the login test')).toMatchObject({ model: 'sonnet', effort: 'medium' })
   expect(r('Security audit')).toMatchObject({ model: 'opus', effort: 'max' })
   expect(r('Architecture of sync')).toMatchObject({ model: 'opus', effort: 'xhigh' })
-  expect(r('Research CRDTs')).toMatchObject({ model: 'fable', effort: 'high' })
+  expect(r('Research CRDTs')).toMatchObject({ model: 'opus', effort: 'max' })
   expect(r('Security audit')!.reason).toContain('review')
 })
 

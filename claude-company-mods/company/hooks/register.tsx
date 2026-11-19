@@ -56,8 +56,8 @@ const CREW = [
   },
   {
     name: 'sage',
-    model: 'fable',
-    effort: 'high',
+    model: 'opus',
+    effort: 'max',
     tools: undefined,
     description:
       'Last resort: science, long ambiguous research, costly factual questions, or problems architect could not solve.',
@@ -140,6 +140,7 @@ export const register: Register = (on, options) => {
   const efforts = new Map<string, Route['effort']>()
   let routedThisSession = 0
   let routedTotal = 0
+  let fableWarned = false
   // Limit meter state; `st.economy` is read synchronously by turn.step.
   const st: MeterState = { windows: {}, economy: false, routedTotal: 0 }
 
@@ -296,13 +297,20 @@ export const register: Register = (on, options) => {
         // The router's remembered subagent effort first.
         const want = efforts.get(e.agentId)
         if (want && want !== e.effort) effort = want
-        // Economy: a subagent's Fable step goes to Opus at xhigh (never the main loop).
-        if (st.economy && modelFamily(model) === 'fable') {
+        // Fable bills usage credits, not the Pro limits: a subagent's Fable step goes to
+        // Opus max (the governor lowers it to xhigh in economy). Never the main loop.
+        if (modelFamily(model) === 'fable') {
           model = 'opus'
-          effort = 'xhigh'
+          effort = 'max'
           rerouted = true
-          recordGoverned('economy: subagent fable -> opus xhigh')
+          recordGoverned('subagent fable -> opus max (no credits)')
         }
+      } else if (modelFamily(model) === 'fable' && !fableWarned) {
+        // The main loop's model is never changed (prompt cache); tell the person once.
+        fableWarned = true
+        try {
+          $.ui.toast('company: main model is Fable, which spends usage credits. /model opus stays inside Pro.')
+        } catch {}
       }
       const g = governEffort(model, effort, st.economy)
       if (g.changed) {

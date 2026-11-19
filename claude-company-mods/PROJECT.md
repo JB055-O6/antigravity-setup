@@ -234,3 +234,10 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 - Charter text 4904 -> 4295 bytes, same meaning (rule 19 verbatim). Full text kept at company-src/CHARTER.full.md. 139/139, tsc 0.
 - Limits at 05:36 UTC: 5h 89% (resets 09:00 UTC), week 12%. Costly runs wait for the reset.
 - Queue after 09:00: (1) measurement r2: edit task + r1 tasks, n=2; (2) held bench runs: Opus x6, Fable x3 tool tasks at low (bench/sweep/pNN/<model>-low); (3) grade; (4) caveman report; (5) package mod for account.
+
+## 2026-11-19: 0.7.0 no-credits rule (client direction)
+- Client: Fable 5.2 now bills usage credits only, not the Pro limits. Rule: no Fable use that costs extra money.
+- Router: research -> opus max (was fable high). Crew sage -> opus max. turn.step: any subagent Fable step -> opus max (economy lowers to xhigh). Main loop Fable is never rerouted (cache); one toast tells the person to use /model opus.
+- Substitute evidence (AA index): Opus max 59, Fable high 62, Opus xhigh 57. Opus max is the strongest Pro-included setting.
+- Held bench runs: Fable x3 dropped (would spend credits). Opus x6 stay.
+- Not verified by me: the billing change itself (client's statement). 140/140 tests, tsc 0, validate pass.

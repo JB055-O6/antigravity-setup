@@ -94,6 +94,6 @@ export function routeSpawn(i: {
     case 'architecture':
       return { model: 'opus', effort: 'xhigh', reason: 'architecture task' }
     case 'research':
-      return { model: 'fable', effort: 'high', reason: 'research task' }
+      return { model: 'opus', effort: 'max', reason: 'research task (Fable needs usage credits; Opus max is in Pro)' }
   }
 }

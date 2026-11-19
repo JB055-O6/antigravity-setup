@@ -15,6 +15,6 @@ Run first, above every other plugin (once per device). Add this line to your use
 
 Already open session: run `/reload-plugins` if the mod is new there, then `/company`. `/company` starts everything again and shows what is on.
 
-Live panel: opens by itself in the desktop app; `/company` opens it anywhere. Shows all 7 parts (charter, router, governor, meter, diet, crew, directives) and recent activity.
+Live panel "Company": one block per part (CHARTER, ROUTER, GOVERNOR, METER, DIET, CREW, DIRECTIVES). Each block says what the part does, its live count and its last actions. CREW shows each subagent: running, done or failed, its model, effort, steps and task. It opens by itself when a desktop app is on the session (at start or when the app connects). `/company` opens it and prints the same blocks as text, with the reason if the app does not show the panel.
 
 Status line: `company · 5h n% · week n% · k subagents routed · g efforts governed · n diet · directives n/4`.

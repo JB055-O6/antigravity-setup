@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import type { Panel } from '../types'
-import { EMPTY_PANEL, PANE_ID, PanelView } from './panel'
+import type { CrewRun, Panel } from '../types'
+import { EMPTY_PANEL, PANE_ID, PanelView, panelText } from './panel'
 import { CHARTER } from './charter'
 import { directiveState, directivesNote } from './directives'
 import { GREP_LINES, READ_LINES, dietPrompt, dietTotal, readNote, recordDiet, shouldCapRead } from './diet'
@@ -80,15 +80,16 @@ type MeterState = {
   log: Panel['log']
   seq: number
   lastGov?: string
+  runs: CrewRun[]
 }
 
 // Change the tag when Panel's fields change: it declines what an older version stored.
-const panel = atom({ plugin: 'company', key: 'panel' } as const, EMPTY_PANEL, { shape: 'panel-1' })
+const panel = atom({ plugin: 'company', key: 'panel' } as const, EMPTY_PANEL, { shape: 'panel-2' })
 
 // One line in the pane's activity list (last 12 kept).
 function note(st: MeterState, kind: string, text: string) {
   st.seq += 1
-  st.log = [...st.log, { n: st.seq, kind, text }].slice(-12)
+  st.log = [...st.log, { n: st.seq, kind, text }].slice(-40)
 }
 
 function showStatus($: EngineInterface, st: MeterState) {
@@ -110,6 +111,7 @@ function showStatus($: EngineInterface, st: MeterState) {
     version: st.version,
     crew: st.crew,
     crewTotal: CREW.length,
+    roster: CREW.map((a) => ({ name: a.name, model: a.model, effort: a.effort, does: a.description.split(/[.:]/)[0] ?? '' })),
     directives: st.dirs,
     ...(st.windows.fiveHour !== undefined ? { fiveHour: st.windows.fiveHour } : {}),
     ...(st.windows.week !== undefined ? { week: st.windows.week } : {}),
@@ -118,6 +120,7 @@ function showStatus($: EngineInterface, st: MeterState) {
     governed: governedTotal(),
     diet: dietTotal(),
     log: st.log,
+    runs: st.runs,
   })).catch(() => {})
 }
 
@@ -226,7 +229,9 @@ export const register: Register = (on, options) => {
   let routedTotal = 0
   let fableWarned = false
   // Limit meter state; `st.economy` is read synchronously by turn.step.
-  const st: MeterState = { windows: {}, economy: false, routedTotal: 0, dirs: [], crew: 0, version: '', log: [], seq: 0 }
+  const st: MeterState = { windows: {}, economy: false, routedTotal: 0, dirs: [], crew: 0, version: '', log: [], seq: 0, runs: [] }
+  // Agent tool call id -> subagent id, to mark a run done when its tool call returns.
+  const runByTool = new Map<string, string>()
 
   on('session.start', async ($, e, next) => {
     await boot($, st)
@@ -245,18 +250,22 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'company' }, async ($) => {
-    const crew = await boot($, st)
+    await boot($, st)
     showStatus($, st)
-    void $.ui.open({ id: PANE_ID, title: 'Company' }).catch(() => {})
-    const w = st.windows
-    const limits = w.fiveHour === undefined && w.week === undefined ? 'limits: no data' : `5h ${w.fiveHour ?? '?'}% · week ${w.week ?? '?'}%`
-    return {
-      text: [
-        `company on: charter, router, governor, meter, diet.`,
-        `crew ${crew}/${CREW.length} registered · ${st.directives ?? 'directives: unknown'}`,
-        `${limits} · economy ${st.economy ? 'ON' : 'off'} · ${st.routedTotal} subagents routed · ${governedTotal()} efforts governed · ${dietTotal()} diet`,
-      ].join('\n'),
+    let placed = 'Panel: could not be opened.'
+    try {
+      const o = await $.ui.open({ id: PANE_ID, title: 'Company' })
+      placed = o.isPlaced ? 'Panel: shown.' : `Panel: not shown here (${o.reason}). This report has the same blocks.`
+    } catch (err) {
+      placed = `Panel: refused (${String(err).slice(0, 120)}). This report has the same blocks.`
     }
+    return { text: panelText(await read($, panel), placed) }
+  })
+
+  on('session.attach', async ($, e, next) => {
+    // A cloud session gets its screen after it starts: open the pane when a desktop app attaches.
+    if (e.surface === 'desktop') void $.ui.open({ id: PANE_ID, title: 'Company' }).catch(() => {})
+    return next(e)
   })
 
   on('session.measure', async ($, e, next) => {
@@ -289,14 +298,33 @@ export const register: Register = (on, options) => {
     } catch {
       return next(e)
     }
-    if (!route && prompt === null) return next(e)
-
     const result = await next({
       ...e,
       ...(route ? { model: route.model } : {}),
       ...(prompt !== null ? { prompt } : {}),
     })
 
+    try {
+      if (!result.deny && result.agentId) {
+        // Every subagent shows in the crew block, routed or not.
+        st.runs = [
+          ...st.runs,
+          {
+            id: result.agentId,
+            type: e.subagentType ?? (e.fork ? 'fork' : 'subagent'),
+            model: route?.model ?? (modelFamily(result.model) ?? result.model),
+            effort: route?.effort ?? 'default',
+            task: (e.description ?? '').slice(0, 80),
+            steps: 0,
+            status: (e.background ? 'background' : 'running') as CrewRun['status'],
+          },
+        ].slice(-8)
+        runByTool.set(e.tool_use_id, result.agentId)
+        if (!route && prompt === null) showStatus($, st)
+      }
+    } catch {
+      // Bookkeeping must never disturb the spawn.
+    }
     try {
       if (!result.deny) {
         if (prompt !== null) {
@@ -412,6 +440,11 @@ export const register: Register = (on, options) => {
       else if (effort !== e.effort) out = { ...e, effort }
       // Log a fix once per kind, not on every step.
       const why = rerouted ? 'subagent Fable → Opus (no usage credits)' : g.changed ? g.reason : undefined
+      const run = e.agentId ? st.runs.find((r) => r.id === e.agentId) : undefined
+      if (run) {
+        run.steps += 1
+        if (run.steps % 3 === 1) showStatus($, st)
+      }
       if (why && why !== st.lastGov) {
         st.lastGov = why
         note(st, 'governor', why)
@@ -440,7 +473,22 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: 'company' }, async ($, e) => {
     const ui = $.ui.resolve(e)
-    const p = await read($, panel)
-    return PanelView(ui, p, Math.max(3, (e.viewport?.rows ?? 30) - 12))
+    return PanelView(ui, await read($, panel))
+  })
+
+  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    const result = await next(e)
+    try {
+      const id = runByTool.get(e.tool_use_id)
+      const run = id ? st.runs.find((r) => r.id === id) : undefined
+      if (run && run.status === 'running') {
+        run.status = result.isError || result.deny !== undefined ? 'failed' : 'done'
+        note(st, 'crew', `${run.type} ${run.status}: ${run.task}`)
+        showStatus($, st)
+      }
+    } catch {
+      // Bookkeeping only.
+    }
+    return result
   })
 }

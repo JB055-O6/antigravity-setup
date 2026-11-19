@@ -259,3 +259,10 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 - Held bench: Opus low on 6 tool tasks, headless, no user settings: 6/6 (p19 20/20, p21 6/6, p24 7/7, p25 10/10 mutants, p26 3/3, p27 2/2), $0.8427 total. Fable x3 dropped (credits).
 - Manager defect (rule 19): 0.9.0 package carried version 0.6.0 (W manifest copied over M). Fixed as 0.9.1 in M, W and repo; version read from inside the zip.
 - Report updated; all queue items closed.
+
+## 2026-11-19: 0.10.0 block panel, crew tracking
+- Client: no panel shown in the desktop app; wants one block per part and live crew.
+- Cause not known yet: the mod threw away ui.open's {isPlaced, reason}. Likely causes: cloud session starts with no desktop surface (pane only opened when session.start said desktop); or the app does not place plugin panes for remote sessions. Fix: open also on session.attach (desktop); /company now prints whether the pane is shown and the engine's reason.
+- Panel: 7 bordered blocks (what it does, live count, last 3 actions). CREW: roster + last 5 subagent runs (running/done/failed/background, model, effort, steps, task); done marked when the Agent tool call returns.
+- /company prints the same 7 blocks as text, so the info shows on every surface.
+- 146/146 tests, tsc 0, validate pass. Not proven live: pane drawing in the desktop app.

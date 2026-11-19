@@ -181,6 +181,7 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 | 1.3 | maker (Haiku, medium) | accepted after fixes | rule 19 text matched word for word by script; all 21 rules present; charter read in full | 1 worker defect: mode section not addressed to "you" as instructed. 2 manager defects: rule 20 wording in the record contradicted its confirmed reading; effort paragraph did not reflect the per-chunk rule clarified to the client. All three fixed by the manager (small edits, solo mode). |
 | 1.4 | builder (Sonnet, medium) | accepted | validate and test re-run by manager; charter constant equals source, 4870 bytes | none found |
 | 1.5 | builder (Sonnet, medium); tests by maker (Haiku, medium) | accepted | 37 tests pass on manager's run; mutation check: with the client-agreement rule deliberately broken in a copy, the rule 5 test fails as it should | none found |
+| 1.6 | builder (Sonnet, medium) | accepted after fix | 79 tests pass on manager's run (20 labelled prompts all classified as labelled); validate passes | 1 manager defect: spec said "starts with", so `!soloist` counted as the `!solo` prefix; fixed by the manager (prefix must be a whole word) with a test added. Worker left a no-op line, removed. |
 
 ## 10. Change log
 
@@ -192,3 +193,4 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 - 2026-11-16: client agreed to account-level install (E); added requirement F (effort pre-decided per employee and task type); asked for point A to be re-explained. Points A, B, C, D and settings 2-4 still open.
 - 2026-11-16: chunks 1.4 and 1.5 accepted. WORK STOPPED: weekly usage window read at 98% (5-hour window 66%). Remaining Phase 1 chunks 1.6 to 1.12 not started. Correction: the repository has no main branch (default is master) and the first push was refused for lack of access. After the client restored access, the work was pushed on 2026-11-16 13:31 UTC to branch claude/models-capability-analysis-pt61if, commit d4b9675. Not on master. Resume after the weekly reset on 2026-11-19 04:00 UTC.
 - 2026-11-16 13:31 UTC: client restored GitHub access and instructed the company to finish chunks 1.6 to 1.12. Weekly window read at 99%, so the chunks cannot run before the reset. Automatic resume scheduled for 2026-11-19 04:05 UTC.
+- 2026-11-19 04:01 UTC: weekly window reset (read at 1%, 5-hour at 8%). Client had instructed on 2026-11-16 to start immediately and do what fits; session now runs on Opus 5.5 (client switch). Scheduled resume cancelled as no longer needed. Chunk 1.6 accepted.

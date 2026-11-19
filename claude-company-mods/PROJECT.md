@@ -229,3 +229,8 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
   T1 subagent lookup: base $0.269, mod $0.125 (-54%, subagent on Haiku). T2 big-file line: $0.085 vs $0.088. T3 count: $0.085 vs $0.088. 6/6 correct.
   Overhead: about +1.8K input tokens per request (charter + crew). Read/Grep caps not triggered.
 - Proposed to client: compact charter to cut overhead. Next: round 2 with an edit task and n=2.
+
+## 2026-11-19 05:40 UTC: 0.6.2 compact charter; plan for the rest
+- Charter text 4904 -> 4295 bytes, same meaning (rule 19 verbatim). Full text kept at company-src/CHARTER.full.md. 139/139, tsc 0.
+- Limits at 05:36 UTC: 5h 89% (resets 09:00 UTC), week 12%. Costly runs wait for the reset.
+- Queue after 09:00: (1) measurement r2: edit task + r1 tasks, n=2; (2) held bench runs: Opus x6, Fable x3 tool tasks at low (bench/sweep/pNN/<model>-low); (3) grade; (4) caveman report; (5) package mod for account.

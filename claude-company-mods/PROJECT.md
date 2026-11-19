@@ -266,3 +266,8 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 - Panel: 7 bordered blocks (what it does, live count, last 3 actions). CREW: roster + last 5 subagent runs (running/done/failed/background, model, effort, steps, task); done marked when the Agent tool call returns.
 - /company prints the same 7 blocks as text, so the info shows on every surface.
 - 146/146 tests, tsc 0, validate pass. Not proven live: pane drawing in the desktop app.
+
+## 2026-11-19: 0.10.1 chat notices (cause found)
+- Client /company: "Panel: not shown here (no-surface: no surface is attached ($.session.surfaces() is empty))". Cause proven: this cloud session has no attached surface; the desktop app shows only the transcript. No mod pane can draw here.
+- Fix: when no pane is placed, each logged action is posted as a system notice via $.session.append (model never reads notices: no token cost). Labels: COMPANY, ROUTER, GOVERNOR, METER, DIET, CREW. No notices while a pane is placed.
+- 148/148 tests, tsc 0, validate pass. Not proven live: that the desktop app shows the notices of a remote session.

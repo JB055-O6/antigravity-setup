@@ -81,7 +81,12 @@ type MeterState = {
   seq: number
   lastGov?: string
   runs: CrewRun[]
+  // Last log line posted as a chat notice, and whether a surface draws the pane.
+  shown: number
+  paneShown: boolean
 }
+
+const LABEL: Record<string, string> = { start: 'COMPANY', route: 'ROUTER', governor: 'GOVERNOR', meter: 'METER', diet: 'DIET', crew: 'CREW' }
 
 // Change the tag when Panel's fields change: it declines what an older version stored.
 const panel = atom({ plugin: 'company', key: 'panel' } as const, EMPTY_PANEL, { shape: 'panel-2' })
@@ -122,6 +127,17 @@ function showStatus($: EngineInterface, st: MeterState) {
     log: st.log,
     runs: st.runs,
   })).catch(() => {})
+  // No pane on screen (a cloud session seen from an app): post each new action as a chat
+  // notice. The model never reads notices, so they cost no tokens.
+  const fresh = st.log.filter((l) => l.n > st.shown)
+  st.shown = st.seq
+  if (!st.paneShown) {
+    for (const l of fresh) {
+      void $.session
+        .append({ message: { type: 'system', content: [{ type: 'text', text: `company · ${LABEL[l.kind] ?? l.kind.toUpperCase()} · ${l.text}` }] } })
+        .catch(() => {})
+    }
+  }
 }
 
 // Everything a session needs, run at start and again by /company in a live session.
@@ -229,14 +245,14 @@ export const register: Register = (on, options) => {
   let routedTotal = 0
   let fableWarned = false
   // Limit meter state; `st.economy` is read synchronously by turn.step.
-  const st: MeterState = { windows: {}, economy: false, routedTotal: 0, dirs: [], crew: 0, version: '', log: [], seq: 0, runs: [] }
+  const st: MeterState = { windows: {}, economy: false, routedTotal: 0, dirs: [], crew: 0, version: '', log: [], seq: 0, runs: [], shown: 0, paneShown: false }
   // Agent tool call id -> subagent id, to mark a run done when its tool call returns.
   const runByTool = new Map<string, string>()
 
   on('session.start', async ($, e, next) => {
     await boot($, st)
     // The live pane opens by itself on the desktop app; /company opens it anywhere.
-    if (e.surface === 'desktop') void $.ui.open({ id: PANE_ID, title: 'Company' }).catch(() => {})
+    if (e.surface === 'desktop') void $.ui.open({ id: PANE_ID, title: 'Company' }).then((o) => { st.paneShown = o.isPlaced }).catch(() => {})
     try {
       await $.command.register({
         name: 'company',
@@ -255,7 +271,8 @@ export const register: Register = (on, options) => {
     let placed = 'Panel: could not be opened.'
     try {
       const o = await $.ui.open({ id: PANE_ID, title: 'Company' })
-      placed = o.isPlaced ? 'Panel: shown.' : `Panel: not shown here (${o.reason}). This report has the same blocks.`
+      st.paneShown = o.isPlaced
+      placed = o.isPlaced ? 'Panel: shown.' : `Panel: not shown here (${o.reason}). This report has the same blocks; each action also shows as a "company ·" line in the chat.`
     } catch (err) {
       placed = `Panel: refused (${String(err).slice(0, 120)}). This report has the same blocks.`
     }
@@ -264,7 +281,7 @@ export const register: Register = (on, options) => {
 
   on('session.attach', async ($, e, next) => {
     // A cloud session gets its screen after it starts: open the pane when a desktop app attaches.
-    if (e.surface === 'desktop') void $.ui.open({ id: PANE_ID, title: 'Company' }).catch(() => {})
+    if (e.surface === 'desktop') void $.ui.open({ id: PANE_ID, title: 'Company' }).then((o) => { st.paneShown = o.isPlaced }).catch(() => {})
     return next(e)
   })
 

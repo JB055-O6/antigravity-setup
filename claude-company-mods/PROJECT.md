@@ -2,6 +2,21 @@
 
 Live record. Updated at every stage change. Last update: 2026-11-16, stage = Gate 4 (client review), awaiting client agreement.
 
+## 0. RE-SCOPE (2026-11-19, client decision) — supersedes sections 2d, 4, 5 and 6 below
+
+Client: mods must be automatic performance and token-efficiency improvements that make Claude Code limits (Pro plan) last; no slash commands to operate them. Gates and client commands are dropped.
+
+Company audit of earlier work: research report and test results stay valid (they are the routing evidence). Charter injection kept, cut to the 21 rules, the two-mode rule and a delegation section. Job record, gate state machine, mode classifier and the unfinished gate rework are removed from the mod (archived; still in git history). The nine held test runs and the caveman-style report stay on hold.
+
+New build order, all automatic:
+| # | Piece | What it does | Status |
+|---|---|---|---|
+| 1 | Router | Pins a crew of subagents (scout Haiku medium, builder Sonnet medium, reviewer Opus max, architect Opus xhigh, sage Fable high) and routes every built-in subagent spawn to the cheapest fitting model and effort; main loop untouched (cache) | building |
+| 2 | Effort governor | Steers main-loop effort away from settings that lose on both score and cost, and steps effort up only on a failed check | planned |
+| 3 | Context diet | Keeps the main loop's context small: big reads and searches go to scout, compact subagent reports, Haiku requests under the 100K price step | planned |
+| 4 | Limit meter | Reads 5-hour and weekly use live, shows it on the status line, shifts to cheaper routing near the cap, records savings | planned |
+| 5 | Measurement | Same tasks with and without the mod; tokens, cost and quality compared | planned |
+
 ## 1. Client charter (the 21 rules, as given by the client on 2026-11-16)
 
 Parties: client = the user. Company and manager = the main session. Employees = the Claude models, working as pinned subagents.
@@ -197,3 +212,4 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 - 2026-11-19 04:01 UTC: weekly window reset (read at 1%, 5-hour at 8%). Client had instructed on 2026-11-16 to start immediately and do what fits; session now runs on Opus 5.5 (client switch). Scheduled resume cancelled as no longer needed. Chunk 1.6 accepted.
 - 2026-11-19: plan change (rule 21): chunks 1.7 and 1.8 are built together by one builder (Sonnet, high) because both change register.tsx; spec at scratchpad/specs/1.7-1.8-gates.md. Interface chosen by the company, reversible: the client signs off by typing !agree, closes a job with !close, and overrides a broken gate with !gates off / !gates on (logged). Only prompts the client types (origin composer or bridge) can open jobs or give these commands. Noted: the account copy of the mod (saved by the client, Nov 16 version) loads in this session next to the development copy.
 - 2026-11-19: gates rejected in review; client commands change from `!agree`, `!close`, `!gates off|on` to slash commands `/agree`, `/close-job`, `/gates off|on`, and mode prefixes from `!project`/`!solo` to `full:`/`solo:` (the `!` form cannot work in the terminal). Rework sent to the builder.
+- 2026-11-19: client re-scoped the mods to automatic token efficiency with no commands; gates dropped; audit done; mod reduced to the charter; router build started.

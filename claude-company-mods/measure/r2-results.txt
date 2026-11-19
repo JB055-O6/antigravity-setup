@@ -1,0 +1,10 @@
+task | setup | grades | mean cost $ | mean input tok | models
+t1 | base | PASS/PASS | 0.2049 | 49561 | opus-5-5
+t1 | mod | PASS/PASS | 0.1179 | 80171 | haiku-5-5,opus-5-5
+t2 | base | PASS/PASS | 0.0934 | 61782 | opus-5-5
+t2 | mod | PASS/PASS | 0.0907 | 52594 | opus-5-5
+t3 | base | PASS/PASS | 0.0872 | 49254 | opus-5-5
+t3 | mod | PASS/PASS | 0.09 | 52539 | opus-5-5
+t4 | base | PASS/PASS | 0.109 | 75438 | opus-5-5
+t4 | mod | PASS/PASS | 0.1134 | 80422 | opus-5-5
+total $ {'base': 0.989, 'mod': 0.8242}

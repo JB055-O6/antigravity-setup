@@ -12,9 +12,9 @@ New build order, all automatic:
 | # | Piece | What it does | Status |
 |---|---|---|---|
 | 1 | Router (DONE 2026-11-19) | Pins a crew of subagents (scout Haiku medium, builder Sonnet medium, reviewer Opus max, architect Opus xhigh, sage Fable high) and routes every built-in subagent spawn to the cheapest fitting model and effort; main loop untouched (cache) | done: 48 tests; live proof below |
-| 2 | Effort governor | Steers main-loop effort away from settings that lose on both score and cost, and steps effort up only on a failed check | planned |
+| 2 | Effort governor (DONE 0.3.0) | Steers main-loop effort away from settings that lose on both score and cost, and steps effort up only on a failed check | planned |
 | 3 | Context diet | Keeps the main loop's context small: big reads and searches go to scout, compact subagent reports, Haiku requests under the 100K price step | planned |
-| 4 | Limit meter | Reads 5-hour and weekly use live, shows it on the status line, shifts to cheaper routing near the cap, records savings | planned |
+| 4 | Limit meter (DONE 0.3.0) | Reads 5-hour and weekly use live, shows it on the status line, shifts to cheaper routing near the cap, records savings | planned |
 | 5 | Measurement | Same tasks with and without the mod; tokens, cost and quality compared | planned |
 
 ## 1. Client charter (the 21 rules, as given by the client on 2026-11-16)
@@ -214,3 +214,4 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 - 2026-11-19: gates rejected in review; client commands change from `!agree`, `!close`, `!gates off|on` to slash commands `/agree`, `/close-job`, `/gates off|on`, and mode prefixes from `!project`/`!solo` to `full:`/`solo:` (the `!` form cannot work in the terminal). Rework sent to the builder.
 - 2026-11-19: client re-scoped the mods to automatic token efficiency with no commands; gates dropped; audit done; mod reduced to the charter; router build started.
 - 2026-11-19: router accepted. Live proof in this session (main loop on Opus): the five crew agents registered (they appeared as agent types company:scout ... company:sage); a general-purpose subagent spawned with no model and the description 'Find where the config is loaded' ran on claude-haiku-5-5 per its transcript. A first probe whose prompt contained the word 'test' ran on claude-sonnet-5-5: by design, coding words route to Sonnet (errs upward, never downward). Known limits: a subagent's very first request may miss its effort if it starts before the spawn resolves (model is set regardless); words in the prompt can send a lookup to Sonnet.
+- 2026-11-19: effort governor and limit meter accepted (builder: company:builder, Sonnet medium). Manager re-run: validate passes, 127/127 tests, tsc clean, rules and thresholds match spec. Unproven in a live session: effort rewrites (the transcript does not record effort) and the real rate-limit field names.

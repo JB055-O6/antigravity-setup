@@ -72,8 +72,8 @@ test('routed spawns are sent on with the model, and tallied', async ($, on) => {
   expect(seen[0]!.model).toBe('haiku')
   expect(seen[1]!.model).toBe('sonnet')
   expect(statuses).toEqual([
-    'company: router on · 1 subagents routed',
-    'company: router on · 2 subagents routed',
+    'company · 1 subagents routed · 0 efforts governed',
+    'company · 2 subagents routed · 0 efforts governed',
   ])
 })
 
@@ -147,4 +147,190 @@ test('the tally under `routes` counts per model, and a failing store never block
   failing = true
   const r = await $.agent.spawn({ ...SPAWN })
   expect(r.deny).toBeUndefined()
+})
+
+// ---- effort governor and limit meter ----
+
+type Chunk = { agentId?: string; model: string; effort?: unknown }
+function stepSink(on: On) {
+  const got: Chunk[] = []
+  on('turn.step', async function* (_, e) {
+    got.push({ agentId: e.agentId, model: e.model, effort: e.effort })
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  return got
+}
+async function step($: any, over: Record<string, unknown>) {
+  const base = { turnId: 't', index: 0, model: 'opus', effort: 'high', messageCount: 1 }
+  for await (const _ of $.turn.step({ ...base, ...over })) void _
+}
+function usageAt(on: On, five: number | null, week = 10) {
+  on('session.usage', () => ({
+    value: {
+      startedAt: 0,
+      context: { window: 200000 },
+      rateLimits:
+        five === null
+          ? []
+          : [
+              { kind: 'five_hour', percentUsed: five },
+              { kind: 'seven_day', percentUsed: week },
+            ],
+    },
+  }) as never)
+}
+function quiet(on: On) {
+  mock.store(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('agent.register', (_, e) => ({ value: { agent: `company:${e.name}` } }))
+}
+const START = { cwd: '/', surface: 'terminal', isInteractive: true } as const
+
+test('governor: main loop sonnet max -> high, opus low -> medium, opus medium untouched', async ($, on) => {
+  mock.store(on)
+  const got = stepSink(on)
+  await step($, { model: 'sonnet', effort: 'max' })
+  await step($, { model: 'claude-sonnet-5-5', effort: 'xhigh' })
+  await step($, { model: 'opus', effort: 'low' })
+  await step($, { model: 'opus', effort: 'medium' })
+  await step($, { model: 'fable', effort: 'xhigh' })
+  await step($, { model: 'haiku', effort: 'max' })
+  await step($, { model: 'sonnet', effort: undefined })
+  expect(got.map(g => [g.model, g.effort])).toEqual([
+    ['sonnet', 'high'],
+    ['claude-sonnet-5-5', 'high'],
+    ['opus', 'medium'],
+    ['opus', 'medium'],
+    ['fable', 'high'],
+    ['haiku', 'max'],
+    ['sonnet', undefined],
+  ])
+})
+
+test('governor: a routed subagent gets its routed effort, then the governor', async ($, on) => {
+  mock.store(on)
+  on('ui.status', () => ({ value: undefined }))
+  engine(on)
+  const got = stepSink(on)
+  // 'Design ...' routes opus/xhigh (a1); 'Find ...' routes haiku/medium (a2).
+  await $.agent.spawn({ ...SPAWN, description: 'Design the cache layer' })
+  await $.agent.spawn({ ...SPAWN })
+  // The step is on sonnet: routed xhigh is then governed to high.
+  await step($, { agentId: 'a1', model: 'sonnet', effort: 'low' })
+  // Routed medium on opus is untouched by the governor.
+  await step($, { agentId: 'a2', model: 'opus', effort: 'low' })
+  expect(got[0]).toMatchObject({ agentId: 'a1', model: 'sonnet', effort: 'high' })
+  expect(got[1]).toMatchObject({ agentId: 'a2', model: 'opus', effort: 'medium' })
+})
+
+test('economy: seeded at 91% five-hour, a fable subagent step goes out as opus xhigh; main loop model untouched', async ($, on) => {
+  quiet(on)
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  usageAt(on, 91)
+  const statuses: Array<string | undefined> = []
+  on('ui.status', (_, e) => {
+    statuses.push(e.text)
+    return { value: undefined }
+  })
+  const got = stepSink(on)
+  await $.session.start({ ...START })
+  expect(toasts).toHaveLength(1)
+  expect(toasts[0]).toContain('91%')
+  expect(statuses[statuses.length - 1]).toBe(
+    'ECONOMY · company · 5h 91% · week 10% · 0 subagents routed · 0 efforts governed',
+  )
+
+  await step($, { agentId: 'sage1', model: 'fable', effort: 'high' })
+  await step($, { agentId: 'r1', model: 'claude-fable-1', effort: 'max' })
+  await step($, { model: 'fable', effort: 'high' })
+  await step($, { model: 'opus', effort: 'max' })
+  await step($, { agentId: 'b1', model: 'sonnet', effort: 'high' })
+  expect(got[0]).toMatchObject({ model: 'opus', effort: 'xhigh' })
+  expect(got[1]).toMatchObject({ model: 'opus', effort: 'xhigh' })
+  expect(got[2]).toMatchObject({ model: 'fable', effort: 'high' })
+  // economy governor on the main loop: opus max -> xhigh, model kept
+  expect(got[3]).toMatchObject({ model: 'opus', effort: 'xhigh' })
+  expect(got[4]).toMatchObject({ model: 'sonnet', effort: 'high' })
+})
+
+test('meter: session.measure turns economy on and off with hysteresis; one toast each; stored', async ($, on) => {
+  const held: Record<string, unknown> = {}
+  on('store.get', (_, e) => ({ value: held[e.key] }))
+  on('store.set', (_, e) => {
+    held[e.key] = e.value
+    return { value: undefined }
+  })
+  on('clock.now', () => ({ value: 5000 }))
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  const statuses: Array<string | undefined> = []
+  on('ui.status', (_, e) => {
+    statuses.push(e.text)
+    return { value: undefined }
+  })
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  const measure = (five: number, week: number) =>
+    $.session.measure({
+      context: { window: 200000 },
+      rateLimits: [
+        { kind: 'five_hour', percentUsed: five },
+        { kind: 'seven_day', percentUsed: week },
+      ],
+      changed: ['rateLimits'],
+    } as never)
+  await measure(50, 50)
+  expect(toasts).toHaveLength(0)
+  await measure(90, 50)
+  expect(toasts).toHaveLength(1)
+  expect(toasts[0]).toContain('five-hour')
+  expect(held.meter).toEqual({ economySince: 5000, lastFiveHour: 90, lastWeek: 50 })
+  await measure(88, 50)
+  await measure(86, 50)
+  expect(toasts).toHaveLength(1)
+  await measure(84, 50)
+  expect(toasts).toHaveLength(2)
+  expect(toasts[1]).toContain('off')
+  expect(held.meter).toEqual({ lastFiveHour: 84, lastWeek: 50 })
+  await measure(10, 85)
+  expect(toasts).toHaveLength(3)
+  expect(toasts[2]).toContain('weekly')
+  expect(statuses[statuses.length - 1]!.startsWith('ECONOMY · company · 5h 10% · week 85%')).toBe(true)
+})
+
+test('status: normal mode with windows, and without (API key)', async ($, on) => {
+  quiet(on)
+  const statuses: Array<string | undefined> = []
+  on('ui.status', (_, e) => {
+    statuses.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  usageAt(on, 23.4, 7)
+  await $.session.start({ ...START })
+  expect(statuses[statuses.length - 1]).toBe(
+    'company · 5h 23% · week 7% · 0 subagents routed · 0 efforts governed',
+  )
+  await $.session.measure({ context: { window: 1 }, rateLimits: [], changed: ['rateLimits'] } as never)
+  expect(statuses[statuses.length - 1]).toBe('company · 0 subagents routed · 0 efforts governed')
+})
+
+test('a throwing usage read changes nothing and blocks nothing', async ($, on) => {
+  quiet(on)
+  on('session.usage', () => {
+    throw new Error('no usage')
+  })
+  on('ui.status', () => ({ value: undefined }))
+  const got = stepSink(on)
+  const r = await $.session.start({ ...START })
+  expect(r.cwd).toBe('/')
+  await step($, { agentId: 'x', model: 'fable', effort: 'high' })
+  expect(got[0]).toMatchObject({ model: 'fable', effort: 'high' })
 })

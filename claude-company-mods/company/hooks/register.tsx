@@ -1,6 +1,16 @@
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 import { CHARTER } from './charter'
 import { routeSpawn, type Route } from './router'
+import {
+  governEffort,
+  meterLine,
+  modelFamily,
+  nextEconomy,
+  readWindows,
+  recordGoverned,
+  governedTotal,
+  type Windows,
+} from './governor'
 
 const COMMON =
   'Work only on the task given. Verify your result before reporting (run the tests or the check that proves it). Report in at most 15 lines: what you did, the proof, and anything unresolved. Never paste large raw output; summarise it.'
@@ -53,10 +63,81 @@ const CREW = [
   },
 ] as const
 
+type MeterState = {
+  windows: Windows
+  economy: boolean
+  economySince?: number
+  routedTotal: number
+}
+
+function showStatus($: EngineInterface, st: MeterState) {
+  try {
+    $.ui.status(
+      meterLine({
+        economy: st.economy,
+        windows: st.windows,
+        routed: st.routedTotal,
+        governed: governedTotal(),
+      }),
+    )
+  } catch {
+    // The line is best-effort.
+  }
+}
+
+// Apply one reading of the rate-limit windows. Best-effort: never throws.
+async function applyLimits(
+  $: EngineInterface,
+  st: MeterState,
+  limits: Parameters<typeof readWindows>[0],
+) {
+  try {
+    const w = readWindows(limits)
+    const was = st.economy
+    st.windows = w
+    st.economy = nextEconomy(was, w)
+    if (st.economy !== was) {
+      try {
+        if (st.economy) {
+          const five = w.fiveHour ?? 0
+          $.ui.toast(
+            five >= 90
+              ? `Economy mode on: five-hour window at ${Math.round(five)}%`
+              : `Economy mode on: weekly window at ${Math.round(w.week ?? 0)}%`,
+          )
+        } else {
+          $.ui.toast(
+            `Economy mode off: five-hour window at ${Math.round(w.fiveHour ?? 0)}%, weekly at ${Math.round(w.week ?? 0)}%`,
+          )
+        }
+      } catch {
+        // A toast failing changes nothing.
+      }
+    }
+    try {
+      if (st.economy && !was) st.economySince = Number(await $.clock.now())
+      if (!st.economy) st.economySince = undefined
+      await $.store.set('meter', {
+        ...(st.economySince !== undefined ? { economySince: st.economySince } : {}),
+        ...(w.fiveHour !== undefined ? { lastFiveHour: w.fiveHour } : {}),
+        ...(w.week !== undefined ? { lastWeek: w.week } : {}),
+      })
+    } catch {
+      // Persisting is best-effort.
+    }
+  } catch {
+    // Leave the previous values.
+  }
+  showStatus($, st)
+}
+
 export const register: Register = (on, options) => {
   // Effort remembered per routed subagent, by the agentId the spawn resolves with.
   const efforts = new Map<string, Route['effort']>()
   let routedThisSession = 0
+  let routedTotal = 0
+  // Limit meter state; `st.economy` is read synchronously by turn.step.
+  const st: MeterState = { windows: {}, economy: false, routedTotal: 0 }
 
   on('session.start', async ($, e, next) => {
     for (const a of CREW) {
@@ -73,7 +154,21 @@ export const register: Register = (on, options) => {
         // One agent failing to register must not stop the others or the session.
       }
     }
-    $.ui.status('company: charter loaded')
+    try {
+      await applyLimits($, st, (await $.session.usage()).rateLimits)
+    } catch {
+      showStatus($, st)
+    }
+    return next(e)
+  })
+
+  on('session.measure', async ($, e, next) => {
+    // Pushed figures: refresh from them. Never blocks.
+    try {
+      await applyLimits($, st, e.rateLimits)
+    } catch {
+      // Keep the previous values.
+    }
     return next(e)
   })
 
@@ -121,7 +216,8 @@ export const register: Register = (on, options) => {
         } catch {
           // The tally is best-effort.
         }
-        $.ui.status(`company: router on · ${total} subagents routed`)
+        st.routedTotal = total
+        showStatus($, st)
       }
     } catch {
       // Bookkeeping must never disturb the spawn.
@@ -130,17 +226,35 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.step', async function* ($, e, next) {
-    // Only a subagent step with a remembered, different effort is changed.
-    let effort: Route['effort'] | undefined
+    // Not a guard: on any error the step goes down unchanged.
+    let out = e
     try {
+      let model: string = e.model
+      let effort: typeof e.effort = e.effort
+      let rerouted = false
       if (e.agentId) {
+        // The router's remembered subagent effort first.
         const want = efforts.get(e.agentId)
         if (want && want !== e.effort) effort = want
+        // Economy: a subagent's Fable step goes to Opus at xhigh (never the main loop).
+        if (st.economy && modelFamily(model) === 'fable') {
+          model = 'opus'
+          effort = 'xhigh'
+          rerouted = true
+          recordGoverned('economy: subagent fable -> opus xhigh')
+        }
       }
+      const g = governEffort(model, effort, st.economy)
+      if (g.changed) {
+        effort = g.effort as typeof e.effort
+        recordGoverned(g.reason)
+      }
+      if (rerouted) out = { ...e, model, effort }
+      else if (effort !== e.effort) out = { ...e, effort }
     } catch {
-      effort = undefined
+      out = e
     }
-    return yield* next(effort ? { ...e, effort } : e)
+    return yield* next(out)
   })
 
   on('prompt.compose', async ($, e, next) => {

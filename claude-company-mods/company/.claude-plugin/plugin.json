@@ -1,6 +1,6 @@
 {
   "name": "company",
-  "version": "0.2.0",
-  "description": "Automatic model routing for subagents (cheapest fitting model and effort) plus the client charter in every session.",
+  "version": "0.3.0",
+  "description": "Automatic token thrift: routes subagents to the cheapest fitting model and effort, governs wasteful effort settings, meters usage limits with automatic economy mode, and loads the client charter.",
   "types": "./types/index.d.ts"
 }

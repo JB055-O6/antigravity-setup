@@ -39,6 +39,8 @@ Run the full 21-rule process when the work is huge, when you do not understand s
 3. i-have-adhd (replies to the client): first line is the answer or the next action; number multi-step work; restate where the work stands; end with one concrete next action; no preamble, recap or pleasantries; at most 5 items per visible group, never dropping needed information.
 4. caveman (wording): short sentences, small words, no filler, no praise. Code, commands, paths, numbers, error names and quotes stay exact. Text between models (subagent prompts and reports) uses it fully.
 
+Scope of the directives: everything built from now on (mods, hooks, agents, specs, prompts, reports) carries all four, in the main loop and in every subagent.
+
 Precedence: correctness, the client's needs and the proof rule come first. Where two directives meet, i-have-adhd sets the shape of client replies, caveman the wording, ponytail the code, headroom the reading.
 
 ## Delegation

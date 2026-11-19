@@ -8,6 +8,7 @@ test('the charter carries all four core directives and their precedence', () => 
     expect(CHARTER).toContain(name)
   }
   expect(CHARTER).toContain('Precedence: correctness')
+  expect(CHARTER).toContain('everything built from now on')
 })
 
 test('every subagent block carries the core directives', () => {

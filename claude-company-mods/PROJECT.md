@@ -222,3 +222,10 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 - Subagent block now carries all four directives (i-have-adhd added: result first, no preamble, recap or closers).
 - Boot check: session.start reads enabledPlugins; status line shows "directives n/4" and names any missing plugin. Built-in short rules still apply when a plugin is off. No hard dependency (an unmet dependency would stop the mod loading).
 - Proof: 139/139 tests, validate passed (author/icon warnings only), tsc exit 0.
+
+## Change log 2026-11-19: 0.6.1 + measurement round 1
+- Charter: "Scope of the directives: everything built from now on carries all four, main loop and every subagent." Test added. 139/139 pass.
+- Measurement r1 (Opus medium main loop, n=1 per cell, company@synced off in base, four directive plugins on in both):
+  T1 subagent lookup: base $0.269, mod $0.125 (-54%, subagent on Haiku). T2 big-file line: $0.085 vs $0.088. T3 count: $0.085 vs $0.088. 6/6 correct.
+  Overhead: about +1.8K input tokens per request (charter + crew). Read/Grep caps not triggered.
+- Proposed to client: compact charter to cut overhead. Next: round 2 with an edit task and n=2.

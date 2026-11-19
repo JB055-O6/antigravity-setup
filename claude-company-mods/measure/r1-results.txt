@@ -1,0 +1,6 @@
+t1 | base | PASS | 0.2691 | 44459 | 354 | 2 | {'claude-opus-5-5': 0.2691} | ['Agent', 'Grep'] | /home/user/antigravity-setup/claude-company-mods/company/hooks/governor.ts:21
+t1 | mod | PASS | 0.1246 | 73139 | 382 | 3 | {'claude-opus-5-5': 0.1235, 'claude-haiku-5-5': 0.0012} | ['Agent', 'Grep', 'Grep', 'Grep'] | /home/user/antigravity-setup/claude-company-mods/company/hooks/governor.ts:21
+t2 | base | PASS | 0.0853 | 44223 | 280 | 2 | {'claude-opus-5-5': 0.0853} | ["Read{'offset': 4500, 'limit': 1}"] | line 004499 of filler text for the company diet live check
+t2 | mod | PASS | 0.0877 | 47815 | 261 | 2 | {'claude-opus-5-5': 0.0877} | ["Read{'offset': 4500, 'limit': 1}"] | line 004499 of filler text for the company diet live check
+t3 | base | PASS | 0.0846 | 44256 | 224 | 2 | {'claude-opus-5-5': 0.0846} | ['Grep'] | 1626
+t3 | mod | PASS | 0.0881 | 47890 | 248 | 2 | {'claude-opus-5-5': 0.0881} | ['Grep'] | 1626

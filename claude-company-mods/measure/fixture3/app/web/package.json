@@ -1,0 +1,8 @@
+{
+  "name": "tea-shop-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "python3 -m http.server 5173"
+  }
+}

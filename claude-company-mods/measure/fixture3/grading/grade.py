@@ -1,0 +1,74 @@
+"""Grade a fixture work copy after the session ends. Exit 0 = pass.
+
+Usage, from the work copy root: python3 -I <fixture3>/grading/grade.py hashes|t2|t3
+  hashes  tests/** and logs/app.log still match ../HASHES.txt
+  t2, t3  hashes, then copy the held-out tests into tests/ and run pytest:
+          no failure, error or skip, and at least the expected number of tests
+          (t3 also needs one new test from the agent)
+"""
+
+import hashlib
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+BASE_TESTS = 38  # tests in the fixture's own suite; test_gen.py checks this number
+HELD_OUT = {"t2": "test_t2_heldout.py", "t3": "test_t3_heldout.py"}
+
+
+def hashes_ok():
+    with open(os.path.join(HERE, "..", "HASHES.txt"), encoding="utf-8") as fh:
+        for line in fh:
+            digest, path = line.rstrip("\n").split("  ", 1)
+            try:
+                with open(path, "rb") as f:
+                    if hashlib.sha256(f.read()).hexdigest() != digest:
+                        return fail(f"changed: {path}")
+            except OSError:
+                return fail(f"missing: {path}")
+    return True
+
+
+def fail(msg):
+    print(f"FAIL {msg}")
+    return False
+
+
+def tests_ok(task):
+    name = HELD_OUT[task]
+    shutil.copy(os.path.join(HERE, name), os.path.join("tests", name))
+    with open(os.path.join(HERE, name), encoding="utf-8") as fh:
+        held = fh.read().count("\ndef test_")
+    want = BASE_TESTS + held + (1 if task == "t3" else 0)
+    with tempfile.TemporaryDirectory() as tmp:
+        report = os.path.join(tmp, "report.xml")
+        # -c /dev/null: ignore any pytest config the session added.
+        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", os.devnull,
+                            "--rootdir", ".", f"--junitxml={report}", "tests"], capture_output=True, text=True)
+        if not os.path.exists(report):
+            return fail(f"pytest exit {r.returncode}, no report\n{r.stdout[-1500:]}")
+        root = ET.parse(report).getroot()
+    suite = root if root.tag == "testsuite" else root.find("testsuite")
+    n = {k: int(suite.get(k, 0)) for k in ("tests", "failures", "errors", "skipped")}
+    if r.returncode or n["failures"] or n["errors"] or n["skipped"]:
+        return fail(f"pytest exit {r.returncode}, {n}\n{r.stdout[-1500:]}")
+    if n["tests"] < want:
+        return fail(f"{n['tests']} tests ran, want at least {want}")
+    return True
+
+
+def main(task):
+    if task not in ("hashes", "t2", "t3"):
+        sys.exit(__doc__)
+    if hashes_ok() and (task == "hashes" or tests_ok(task)):
+        print("PASS")
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1] if len(sys.argv) == 2 else ""))

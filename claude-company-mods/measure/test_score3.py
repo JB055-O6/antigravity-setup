@@ -31,7 +31,8 @@ def usage(u=6, cc=1000, cr=5000, out=50, c1h=None):
 
 
 def write(d, name, cost=0.010024, text=GOOD_T4, models=None, plugin=KEEP, loaded=KEEP, hashes=0, cmds=(), extra=(),
-          init=True, result=True, is_error=False, subtype="success", exit=0, prep=KEEP, mcp=()):
+          init=True, result=True, is_error=False, subtype="success", exit=0, prep=KEEP, mcp=(), skills=(),
+          cwd=None, grade=()):
     """One run as run3.sh leaves it: <name>.jsonl (stream-json) and <name>.grade.
 
     The setup comes from the name: A0 loads builtin plugins only, A none of company, others R;
@@ -50,8 +51,8 @@ def write(d, name, cost=0.010024, text=GOOD_T4, models=None, plugin=KEEP, loaded
     plugins = BUILTIN + ([] if setup == "A0" else [{"name": "ponytail", "path": "/p"}])
     plugins += [{"name": "company", "path": p} for p in loaded]
     tools = [{"type": "tool_use", "id": f"t{i}", "name": "Bash", "input": {"command": c}} for i, c in enumerate(cmds)]
-    ev = ([{"type": "system", "subtype": "init", "plugins": plugins, "mcp_servers": [{"name": m} for m in mcp]}]
-          if init else [])
+    ev = ([{"type": "system", "subtype": "init", "plugins": plugins, "mcp_servers": [{"name": m} for m in mcp],
+            "skills": list(skills), **({"cwd": cwd} if cwd else {})}] if init else [])
     ev += [{"type": "assistant", "parent_tool_use_id": None, "message": {"content": tools}}, *extra]
     if result:
         ev.append({"type": "result", "subtype": subtype, "is_error": is_error, "result": text, "total_cost_usd": cost,
@@ -60,7 +61,8 @@ def write(d, name, cost=0.010024, text=GOOD_T4, models=None, plugin=KEEP, loaded
     with open(os.path.join(d, name + ".jsonl"), "w") as fh:
         fh.write("not json: stderr noise\n" + "".join(json.dumps(e) + "\n" for e in ev))
     with open(os.path.join(d, name + ".grade"), "w") as fh:
-        fh.write("\n".join([f"plugin {plugin or 'none'}", f"exit {exit}", *prep, f"hashes {hashes}", "# PASS", ""]))
+        fh.write("\n".join([f"plugin {plugin or 'none'}", f"exit {exit}", *prep, *grade, f"hashes {hashes}", "# PASS",
+                            ""]))
 
 
 def tool(name, inp, parent=None):
@@ -169,6 +171,13 @@ def test_plugin_check(d):
     assert invalid(d, "C-T4-1", loaded=[R, R])  # two company plugins
     assert invalid(d, "C-T4-1", loaded=None)  # none
     assert invalid(d, "A0-T4-1", mcp=["plugin:playwright:playwright"])  # pure stock with an MCP server
+    assert invalid(d, "A0-T4-1", skills=["update-config", "ponytail:ponytail"])  # --safe-mode ignored
+    assert invalid(d, "A0-T4-1", skills=["anthropic-skills:docx"])  # synced account skills
+    assert invalid(d, "A0-T4-1", skills=["session-start-hook"], grade=["userskills session-start-hook "])
+    write(d, "A0-T4-3", skills=["update-config", "plugin-authoring", "cc-plugin-privacy:x"],
+          grade=["userskills session-start-hook "])  # bundled skills and builtin plugin skills are stock
+    assert [r["name"] for r in score3.collect(d)[0]] == ["A0-T4-3"]
+    os.remove(os.path.join(d, "A0-T4-3.jsonl"))
     write(d, "A0-T4-1")  # then a non-builtin plugin in its init
     path = os.path.join(d, "A0-T4-1.jsonl")
     text = open(path).read().replace('"path": "builtin"}]', '"path": "builtin"}, {"name": "ponytail", "path": "/p"}]', 1)
@@ -194,8 +203,20 @@ def test_harness_faults(d):
     assert invalid(d, "C-T4-1", init=False)  # the session never started
     assert invalid(d, "C-T4-1", result=False, exit=1)  # crashed, not a timeout
     assert invalid(d, "C-T4-1", result=False, exit=137)
-    assert invalid(d, "C-T4-1", is_error=True, text="Claude AI usage limit reached|1795706400")
-    assert invalid(d, "C-T4-1", is_error=True, text="API Error: 529 {\"type\":\"overloaded_error\"}")
+    for text in ("You've hit your 5-hour limit \u00b7 resets 3pm", "You've hit your weekly limit \u00b7 resets Dec 1",
+                 "You've hit your Opus limit", "You've hit your session limit", "You've reached your Fable limit for this week.",
+                 "You're out of usage credits", "API Error: 529 {\"type\":\"overloaded_error\"}"):  # CLI 2.1.332 strings
+        assert invalid(d, "C-T4-1", is_error=True, text=text), text
+    assert score3.API_FAULT.search("success You've hit your 5-hour limit \u00b7 resets 3pm")
+
+    def limit(**info):
+        return [{"type": "rate_limit_event", "rate_limit_info": info}]
+
+    assert invalid(d, "C-T4-1", extra=limit(status="rejected"))  # hit the limit, even if the answer came back
+    assert invalid(d, "C-T4-1", extra=limit(status="allowed", unifiedWindows={"seven_day": {"status": "rejected"}}))
+    write(d, "C-T4-2", extra=limit(status="allowed", overageStatus="rejected"))  # overage off is normal
+    assert [r["name"] for r in score3.collect(d)[0]] == ["C-T4-2"]
+    os.remove(os.path.join(d, "C-T4-2.jsonl"))
     write(d, "C-T4-1", result=False, exit=124)
     (r,), warns = score3.collect(d)
     assert not r["ok"] and r["why"] == "timeout" and not warns, (r, warns)
@@ -207,13 +228,22 @@ def test_leak_detector(d):
                 {"command": "ls ~/.claude/projects"}):
         warns = invalid(d, "C-T4-1", extra=[tool("Read", inp)])
         assert warns and "possible leak" in warns[0], (inp, warns)
+    for inp in ({"command": "cd ../../r3 && cat C-T4-1.jsonl"}, {"command": "cd ../.. && cat r3/warm/C-T6-w1.jsonl"},
+                {"file_path": "../../2/C-T3-1/shop/pricing/engine.py"}, {"command": "ls /b/bench3/2"},
+                {"pattern": "def ", "path": "/b/bench3"}):
+        warns = invalid(d, "C-T4-1", cwd="/b/bench3/1/C-T4-1", extra=[tool("Read", inp)])
+        assert warns and "possible leak" in warns[0], (inp, warns)
     sub = [tool("Bash", {"command": "grep -r tax /home/user/antigravity-setup"}, parent="toolu_1")]
     assert invalid(d, "C-T4-1", extra=sub)  # a subagent counts too
     work = "/tmp/claude-0/-home-user-antigravity-setup/5b/scratchpad/bench3/1/C-T4-1"
-    write(d, "C-T4-1", extra=[tool("Read", {"file_path": work + "/logs/app.log"}),
-                              tool("Bash", {"command": "pip list", "description": "Check after upgrading"})])
+    write(d, "C-T4-1", cwd=work, extra=[tool("Read", {"file_path": work + "/logs/app.log"}),
+                                        tool("Bash", {"command": "pip list", "description": "Check after upgrading"}),
+                                        tool("Edit", {"file_path": "shop/x.py", "new_string": "r3 = total / 2"}),
+                                        tool("Agent", {"prompt": f"Look in {work} for tax"})])
     runs, warns = score3.collect(d)
-    assert len(runs) == 1 and not warns, warns  # the work dir and "upgrading" do not trip it
+    assert len(runs) == 1 and not warns, warns  # the work dir, "upgrading" and an r3 variable do not trip it
+    write(d, "C-T4-1", cwd="/w", extra=[tool("Read", {"file_path": "/w/shop/x.py"})])  # not a run3 work dir:
+    assert len(score3.collect(d)[0]) == 1  # no bench root to guard, so no root check (else "/" flags all)
 
 
 def test_valid_cli(d):
@@ -255,6 +285,10 @@ def test_meter(d):
                                "seven_day": {"utilization": 0.86, "resetsAt": now + 9000}}}
     write(d, "A-T1-1", extra=[{"type": "rate_limit_event", "rate_limit_info": info}])
     assert score3.meter(d, now)[:2] == ("wait", 9060)  # week at 85%+ would turn economy on in B-F only
+    for week, state in ((0.83, "wait"), (0.829, "go")):  # 2% margin: a run can cross the line mid-session
+        info["unifiedWindows"]["seven_day"]["utilization"] = week
+        write(d, "A-T1-1", extra=[{"type": "rate_limit_event", "rate_limit_info": info}])
+        assert score3.meter(d, now)[0] == state, (week, score3.meter(d, now))
     assert meter(0.5, now + 6000, age=901) == ("stale", 0)  # old reading after a long gap
     assert meter(0.9, now + 6000, age=901) == ("stale", 0)
     os.makedirs(os.path.join(d, "warm"))

@@ -9,8 +9,9 @@ It passes when the session ended in success, every regex rule in fixture3/TASKS.
 the answer, the cmd rule exited 0, and (fixture tasks) the test and log hashes held.
 A timeout (exit 124) is a fail. A harness fault is INVALID: left out with a WARN, so bench3.sh
 runs it again: no .grade, a failed rtk check or graph build, no init event, no result without
-a timeout, an API or usage-limit error, the wrong plugin set, or a tool input that names the
-repo, the grading files or the results (a possible leak).
+a timeout, an API or usage-limit error (or a rate_limit_event with status rejected), the wrong
+plugin set, or a tool input that names the repo, the grading files, the results, the bench work
+root outside its own dir, or another run's work dir (a possible leak).
 Failed runs count as fails and stay out of every mean; means are over passed runs.
 Tokens sum every model in modelUsage, so subagent tokens count (result.usage is the main loop only).
 norm $: the run repriced with every input token (uncached, cache write, cache read) at the
@@ -36,7 +37,8 @@ TASKS = test_gen.tasks()
 SETUPS = ("A0", "A", "B", "C", "D", "E", "F")
 CMP = {"B": "A", "C": "A", "D": "C", "E": "C", "F": "C"}  # cost base per setup (spec 10 rule 2); A0 is a reference
 ACTED = ("agent", "cheap", "rtk", "graph")
-LIMIT = 0.85  # 5 h or week use at which all lanes wait for the reset (the mod's economy starts at week 85%)
+LIMIT = 0.85  # 5 h use at which all lanes wait for the reset (the mod's economy starts at 90%)
+WEEK_LIMIT = 0.83  # week use at which all lanes wait; economy starts at 85%, and a run can cross mid-session
 METER_AGE = 900  # s; an older 5 h reading is stale
 # $ per MTok: input, output, cache write 5 m, cache write 1 h, cache read. Every run checks it against costUSD.
 PRICE = {
@@ -48,8 +50,12 @@ NAME = re.compile(r"(A0|[A-F])-(T\d(?:-big)?)-(\w+)\.jsonl$")
 RTK = re.compile(r"(?:^|[;&|]\s*)rtk\s")
 GRAPH = re.compile(r"(?:^|[;&|]\s*)graphify\s")
 # The work dir spells the repo as -home-user-antigravity-setup, so it does not match.
-LEAK = re.compile(r"/home/user/antigravity-setup|TASKS\.md|fixture3|\bgrading\b|/r3/|\.claude/projects")
-API_FAULT = re.compile(r"(?i)usage limit|limit reached|overloaded|api error")
+LEAK = re.compile(r"/home/user/antigravity-setup|TASKS\.md|fixture3|\bgrading\b|/r3\b|\br3/|\.claude/projects")
+RUN_DIR = re.compile(r"(?<![\w-])(?:A0|[A-F])-T\d(?:-big)?-\w+")  # another run's work dir (e.g. ../../2/C-T3-1)
+# Limit and API messages of the CLI (2.1.332): "You've hit your 5-hour limit", "... weekly limit",
+# "You've reached your Fable limit", "You're out of usage credits", "API Error: ...".
+API_FAULT = re.compile(r"(?i)usage limit|limit reached|overloaded|api error|hit your .*limit|reached your .*limit"
+                       r"|out of (?:usage|extra usage)")
 
 
 def events(path):
@@ -71,20 +77,23 @@ def load(path, warns):
     def invalid(why):
         warns.append(f"{name}: INVALID, {why}; run left out")
 
-    res = init = leak = None
-    bash, agents = {}, set()
+    res = init = None
+    bash, agents, inputs, rejected = {}, set(), [], False
     for d in events(path):
         t = d.get("type")
         if t == "result":
             res = d
         elif t == "system" and d.get("subtype") == "init":
             init = d
+        elif t == "rate_limit_event":  # status, not overageStatus, says the request was refused
+            info = d.get("rate_limit_info") or {}
+            rejected |= "rejected" in [info.get("status")] + [w.get("status") for w in
+                                                               (info.get("unifiedWindows") or {}).values()]
         elif t == "assistant":  # main loop and subagents (parent_tool_use_id set)
             for b in (d.get("message") or {}).get("content") or []:
                 if b.get("type") != "tool_use":
                     continue
-                m = LEAK.search(json.dumps(b.get("input")))
-                leak = leak or (m and f"{b.get('name')} input names {m.group(0)}")
+                inputs.append((b.get("name"), json.dumps(b.get("input"))))
                 if b.get("name") == "Bash":  # a message can arrive in several events, so key by id
                     bash[b.get("id")] = (b.get("input") or {}).get("command") or ""
                 elif b.get("name") in ("Agent", "Task") and not d.get("parent_tool_use_id"):
@@ -94,7 +103,7 @@ def load(path, warns):
         with open(path[:-6] + ".grade", encoding="utf-8") as fh:
             for line in fh:
                 k, _, v = line.rstrip("\n").partition(" ")
-                if k in ("plugin", "hashes", "cmd", "exit", "rtk", "graph"):
+                if k in ("plugin", "hashes", "cmd", "exit", "rtk", "graph", "userskills"):
                     g[k] = v
     except OSError:
         return invalid("no .grade file (run3.sh did not finish)")
@@ -105,9 +114,13 @@ def load(path, warns):
     if not init:
         return invalid(f"no init event, exit {g.get('exit', '?')} (the session did not start)")
     plugins = init.get("plugins") or []
-    if setup == "A0":
+    if setup == "A0":  # in case --safe-mode is ignored: plugins, MCP servers, user and plugin skills
+        builtin = {p.get("name") for p in plugins if p.get("path") == "builtin"}
+        user = set(g.get("userskills", "").split())
         extra = [p.get("name") for p in plugins if p.get("path") != "builtin"]
         extra += [f"MCP {m.get('name')}" for m in init.get("mcp_servers") or []]
+        extra += [f"skill {k}" for k in init.get("skills") or []
+                  if (":" in k and k.split(":")[0] not in builtin) or k in user]
         if extra:
             return invalid(f"A0 is pure stock, but {', '.join(map(str, extra))} loaded")
     else:
@@ -115,8 +128,16 @@ def load(path, warns):
         got = [os.path.realpath(p.get("path", "")) for p in plugins if p.get("name") == "company"]
         if got != want:
             return invalid(f"company plugin {got or 'absent'}, setup wants {want or 'none'}")
-    if leak:
-        return invalid(f"possible leak: {leak}")
+    cwd = init.get("cwd") or ""
+    root = os.path.dirname(os.path.dirname(cwd)) if os.path.basename(cwd) == name else ""  # bench work root
+    for tool, text in inputs:
+        m = LEAK.search(text)
+        other = next((x for x in RUN_DIR.findall(text) if x != name), None)
+        if m or other or (root and root in text.replace(cwd, "")):
+            what = m.group(0) if m else other or "the bench work root"
+            return invalid(f"possible leak: {tool} input names {what}")
+    if rejected:
+        return invalid("a rate_limit_event says rejected (the usage limit was hit)")
     res = res or {}
     if not res and g.get("exit") != "124":
         return invalid(f"no result, exit {g.get('exit', '?')} (not a timeout)")
@@ -266,7 +287,7 @@ def meter(d, now=None, max_age=METER_AGE):
 
     state is go, wait (seconds to the reset + 60) or stale (no reading, or none newer than max_age
     by its file's mtime; the caller takes a fresh reading or waits). It fails closed: a reading
-    with no 5 h figure is stale. A week use at LIMIT also waits, so the mod's economy mode
+    with no 5 h figure is stale. A week use at WEEK_LIMIT also waits, so the mod's economy mode
     (5 h 90% or week 85%) cannot turn on in some setups and not in others.
     """
     now = time.time() if now is None else now
@@ -297,7 +318,7 @@ def meter(d, now=None, max_age=METER_AGE):
     if (u >= LIMIT or w.get("status") == "rejected") and now < reset:
         return "wait", math.ceil(reset - now) + 60, f"5 h use {u:.0%}"
     wk = (last.get("unifiedWindows") or {}).get("seven_day") or {}
-    if isinstance(wk.get("utilization"), (int, float)) and wk["utilization"] >= LIMIT and now < (wk.get("resetsAt") or 0):
+    if isinstance(wk.get("utilization"), (int, float)) and wk["utilization"] >= WEEK_LIMIT and now < (wk.get("resetsAt") or 0):
         return "wait", math.ceil(wk["resetsAt"] - now) + 60, f"week use {wk['utilization']:.0%} (economy starts at 85%)"
     return "go", 0, f"5 h use {u:.0%}"
 

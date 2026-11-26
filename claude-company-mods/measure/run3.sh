@@ -110,6 +110,8 @@ case $SETUP in A|A0) code=none ;; B) code=785718d ;; # the code under test, take
   *) code=$(git -C "$REPO" rev-parse --short HEAD)$([ -n "$(git -C "$REPO" status --porcelain -- "$R")" ] && echo +dirty) ;;
 esac
 HEAD=("plugin ${PLUG:-none}" "code $code" "env ${ENVS[*]}" "${PREP[@]}")
+# A0: the user's own skills (score3 calls A0 INVALID if one loads); the synced ones carry a namespace
+[ "$SETUP" = A0 ] && HEAD+=("userskills $(ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills" 2>/dev/null | grep -vx synced | tr '\n' ' ')")
 if [[ " ${PREP[*]} " =~ \ (rtk|graph)\ [1-9] ]]; then # D/F or E/F would run as C: spend nothing
   : > "$R3/$NAME.jsonl"; printf '%s\n' "${HEAD[@]}" "exit skipped" > "$R3/$NAME.grade"
   echo "$NAME lane $LANE skipped: ${PREP[*]}" >&2; exit 1

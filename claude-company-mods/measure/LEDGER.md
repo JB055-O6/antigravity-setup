@@ -17,7 +17,8 @@ Stop rule: 2 full 5 h windows with no proven saving, then report to the client.
 ## Method notes
 
 - E and F start with a graph that run3.sh builds before the session. So they show a later session in a repo, not the first one.
-- Economy mode cannot start in the bench. It starts at 5 h 90% or week 85%, and the bench waits at 5 h 85% and week 85%.
+- Economy mode cannot start in the bench. It starts at 5 h 90% or week 85%. The bench waits at 5 h 85% and week 83%.
+  This margin keeps a run below the economy line while the run goes on.
 - Verdicts use the raw `total_cost_usd`. The normalised cost (norm $) is for display only.
 - Risk: B to F and the live session share one company plugin store. Today no setup reads its meter key back.
 

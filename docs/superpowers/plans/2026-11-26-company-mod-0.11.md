@@ -16,15 +16,15 @@
 - **CHECK** (run at the end of every task; all must hold): `bash claude-company-mods/check.sh` prints `TEST OK <n> pass 0 fail`, `VALIDATE OK`, `TSC OK`.
 - One hooks module: `hooks/hooks.json` stays `{ "modules": ["./register.tsx"] }`. No `import()`.
 - Validator rules (engine, verified): `$` may be passed only to a function declared at the top of its file (a function declaration or a const bound to one) or imported from the mod's own files; `$` is otherwise only spelled `$.noun.method(...)`; every `on` call is `on("<string literal event>", [matcher,] hook)`. So `ctx` holds no `$`, and no helper calls a hook it got as a parameter.
-- Guard pattern for every hook (copy exactly; generator form for `turn.step`; amended in Task 6 — `ok(ctx)` after success resets the failure streak):
+- Guard pattern for every hook (copy exactly; generator form for `turn.step`; amended in Task 6 — `ok(ctx)` after success resets the failure streak; `beneath(next)` marks errors that come from below so only a module's own errors count):
   ```ts
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     if (!isOn(ctx)) return next(e)
-    try { const r = await bashcapCall($, e, next, ctx); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
+    try { const r = await bashcapCall($, e, beneath(next), ctx); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
   })
   on('turn.step', {}, async function* ($, e, next) {
     if (!isOn(ctx)) return yield* next(e)
-    try { const r = yield* governStep($, e, next, ctx); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
+    try { const r = yield* governStep($, e, beneath(next), ctx); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
   })
   ```
 - Module wiring (validator-proven in Task 6): each module file exports a top-level `export function register<Name>(on: On, ctx: Ctx): void` (e.g. `registerBashcap`); `register.tsx` imports each by name and calls them one by one in the spec order (no loop, no `m.register(...)`, which the validator refuses). The same event may be hooked by several modules only when every hook after the first carries a matcher; use `{}` for "match all" (`on('session.start', {}, hook)`). Chain order = call order in register.tsx.

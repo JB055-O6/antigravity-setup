@@ -1,0 +1,28 @@
+name: company-mod
+on:
+  push:
+    paths: ['claude-company-mods/**', '.github/workflows/company-mod.yml']
+  pull_request:
+    paths: ['claude-company-mods/**', '.github/workflows/company-mod.yml']
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      R: claude-company-mods/company
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm i -g @anthropic-ai/claude-code
+      # types/ is git-ignored; the engine writes it when it loads a mod from a dev-mods folder.
+      - name: Write engine types
+        env: { ANTHROPIC_API_KEY: ci-placeholder }  # load needs no login; the call after load may fail
+        run: |
+          H=$(mktemp -d); SID=$(python3 -c 'import uuid;print(uuid.uuid4())')
+          D=$H/.claude/dev-mods/$SID; mkdir -p $D; cp -r "$R" $D/company
+          HOME=$H timeout 120 claude -p hi --tools "Bash,Edit,Read,Grep,Glob,Write" --session-id $SID --plugin-dir $D/company || true
+          if [ -d $D/company/.claude-plugin/types ]; then cp -r $D/company/.claude-plugin/types "$R/.claude-plugin/"
+          else echo "::warning::engine wrote no types; tsc will fail"; fi
+      - run: bash claude-company-mods/check.sh
+      - run: python3 -m py_compile claude-company-mods/measure/*.py

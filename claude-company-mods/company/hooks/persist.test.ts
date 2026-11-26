@@ -165,3 +165,80 @@ test('a failing store never blocks a spawn', async ($, on) => {
   expect(statuses[statuses.length - 1]).toContain('1 subagents routed')
   expect(await $.session.end({ ...END })).toEqual({ sessionId: 's1' })
 })
+
+test('a step that comes first after a reload is governed from stored economy and keeps the pane', async ($, on) => {
+  const { statuses } = engine(on)
+  store(on, { meter: { sessionId: 's1', economy: true, economySince: 1000, lastFiveHour: 88, lastWeek: 40 } })
+  on('session.id', () => ({ value: 's1' }))
+  const dirs = ['ponytail', 'i-have-adhd', 'headroom', 'caveman'].map((name) => ({ name, on: true }))
+  // A hot reload fires no session.start: the step is the first event of the new load.
+  const held = state(on, {
+    panel: {
+      value: {
+        shape: 'panel-2',
+        value: {
+          version: '0.11.0', crew: 5, crewTotal: 5, roster: [], directives: dirs, economy: true, routed: 0, governed: 0, diet: 0,
+          log: [{ n: 3, kind: 'start', text: 'company 0.11.0 on' }], runs: [],
+        },
+      },
+      version: 2,
+    },
+  })
+  const got = stepSink(on)
+  for await (const _ of $.turn.step({ turnId: 't', index: 0, model: 'opus', effort: 'max', messageCount: 1, agentId: 'x1' })) void _
+  expect(got[0]).toEqual({ model: 'opus', effort: 'xhigh' })
+  const pane = (held.panel!.value as { value: Record<string, unknown> }).value
+  expect(pane).toMatchObject({ version: '0.11.0', crew: 5, directives: dirs, economy: true, fiveHour: 88, week: 40 })
+  expect((pane.log as Array<{ n: number; text: string }>).map((l) => l.n)).toEqual([3, 4])
+  expect(statuses[statuses.length - 1]!.startsWith('ECONOMY · company · 5h 88% · week 40%')).toBe(true)
+  expect(statuses[statuses.length - 1]).toContain('directives 4/4')
+})
+
+test('a hanging store read does not stall a spawn', async ($, on) => {
+  const { models } = engine(on)
+  const clock = mock.clock(on, { now: 1000 })
+  on('store.get', () => new Promise(() => {}))
+  on('store.set', () => ({ value: undefined }))
+  let done = false
+  const spawned = $.agent.spawn({ ...SPAWN }).then((r) => ((done = true), r))
+  await clock.advance(1000)
+  expect(done).toBe(false)
+  await clock.advance(500)
+  const r = await spawned
+  expect(r.agentId).toBe('a1')
+  expect(models).toEqual(['haiku'])
+  // The wait is once per load: the next spawn does not wait again.
+  done = false
+  const again = $.agent.spawn({ ...SPAWN, tool_use_id: 'tu2' }).then((r) => ((done = true), r))
+  await clock.settle()
+  expect(done).toBe(true)
+  await again
+})
+
+test('a count the 2 s gap held back is written when the gap ends', async ($, on) => {
+  engine(on)
+  const held = store(on)
+  const clock = mock.clock(on, { now: 1000 })
+  await $.agent.spawn({ ...SPAWN })
+  await clock.settle()
+  expect((held.lifetime as { routes: { haiku: number } }).routes.haiku).toBe(1)
+  await $.agent.spawn({ ...SPAWN, tool_use_id: 'tu2' })
+  await clock.settle()
+  expect((held.lifetime as { routes: { haiku: number } }).routes.haiku).toBe(1)
+  await clock.advance(2000)
+  expect((held.lifetime as { routes: { haiku: number } }).routes.haiku).toBe(2)
+})
+
+test('after /clear the meter is stored under the new session id', async ($, on) => {
+  engine(on)
+  const held = store(on)
+  const clock = mock.clock(on, { now: 1000 })
+  let id = 's1'
+  on('session.id', () => ({ value: id }))
+  await $.session.measure({ context: { window: 1 }, rateLimits: [{ kind: 'five_hour', percentUsed: 91 }], changed: ['rateLimits'] } as never)
+  expect(held.meter).toMatchObject({ sessionId: 's1', economy: true })
+  await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
+  id = 's2'
+  await clock.advance(2000)
+  expect(held.meter).toMatchObject({ sessionId: 's2', economy: true })
+})

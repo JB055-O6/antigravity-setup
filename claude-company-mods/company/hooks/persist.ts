@@ -3,16 +3,19 @@
 // this session's `meter`. The host is the only writer; read/update take only atoms made in this
 // file, so nothing else touches them.
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface } from 'claude-code'
+import type { EngineInterface, Timer } from 'claude-code'
 import type { StoredEntry, StoredHealth } from '../types'
 import { OFF_REASONS, type Entry, type Health, type ModuleId, type Shared } from './core'
+import { restorePanel } from './host'
 import type { Route } from './router'
 
 type Model = Route['model']
 type Routes = Record<Model, number> & { since?: number }
 const MODELS: readonly Model[] = ['haiku', 'sonnet', 'opus', 'fable']
-// At most one `lifetime` write per gap; session.end writes what the gap held back.
+// At most one `lifetime` write per gap; a trailing write (or session.end) writes what it held back.
 export const WRITE_GAP_MS = 2000
+// The longest a hook waits for restore, once per load; then it goes on from memory.
+export const RESTORE_WAIT_MS = 1500
 
 export const EMPTY_LEDGER: Partial<Record<string, StoredEntry>> = {}
 export const EMPTY_HEALTH: Partial<Record<string, StoredHealth>> = {}
@@ -20,14 +23,23 @@ export const EMPTY_HEALTH: Partial<Record<string, StoredHealth>> = {}
 export const ledgerAtom = atom({ plugin: 'company', key: 'ledger' } as const, EMPTY_LEDGER, { shape: 'ledger-1' })
 export const healthAtom = atom({ plugin: 'company', key: 'health' } as const, EMPTY_HEALTH, { shape: 'health-1' })
 
+// The stored shapes (types/index.d.ts) name the same fields as core.ts: a field added on one side fails tsc.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+type Holds<T extends true> = T
+export type StoredFieldsMatch = [Holds<Same<keyof Entry, keyof StoredEntry>>, Holds<Same<keyof Health, keyof StoredHealth>>]
+
 // What this load has read and written, per Shared.
 type Book = {
+  restoring?: Promise<void>
+  // restore finished, or a hook already waited RESTORE_WAIT_MS for it: no hook waits again.
+  settled: boolean
   // The atoms were read, so a write never puts a blank copy over them.
   atomsRead: boolean
   // Routes counted and not yet in `lifetime`.
   unsaved: Partial<Record<Model, number>>
   lastWrite: number
-  // The meter as last stored (without sessionId), to write only a change.
+  trailing?: Timer
+  // The meter as last stored, session id included, to write only a change.
   meter: string
   // Writes run one at a time, in call order.
   writing: Promise<void>
@@ -37,13 +49,34 @@ const books = new WeakMap<Shared, Book>()
 function book(s: Shared): Book {
   let b = books.get(s)
   if (!b) {
-    b = { atomsRead: false, unsaved: {}, lastWrite: -Infinity, meter: JSON.stringify(meterOf(s)), writing: Promise.resolve() }
+    b = { settled: false, atomsRead: false, unsaved: {}, lastWrite: -Infinity, meter: meterText(undefined, s), writing: Promise.resolve() }
     books.set(s, b)
   }
   return b
 }
 
-// Load once, at the first hook after register: atoms, then `lifetime` (or the old `routes`), then `meter`.
+// What every hook awaits first: restore, run once per load by whichever hook comes first (a hot
+// reload need not start with session.start). It waits at most RESTORE_WAIT_MS in all, so a
+// hanging read never stalls a hook; restore then ends in the background. Never throws.
+export async function ready($: EngineInterface, s: Shared): Promise<void> {
+  const b = book(s)
+  if (b.settled) return
+  b.restoring ??= restore($, s).finally(() => {
+    b.settled = true
+  })
+  const stop = new AbortController()
+  // A clock that cannot wait leaves the wait to restore alone.
+  const timeout = $.clock.sleep(RESTORE_WAIT_MS, { signal: stop.signal }).then(
+    () => {
+      b.settled = true
+    },
+    () => new Promise<void>(() => {}),
+  )
+  await Promise.race([b.restoring, timeout])
+  stop.abort()
+}
+
+// Load once: atoms, the pane's snapshot, then `lifetime` (or the old `routes`), then `meter`.
 export async function restore($: EngineInterface, s: Shared): Promise<void> {
   const b = book(s)
   try {
@@ -65,19 +98,27 @@ export async function restore($: EngineInterface, s: Shared): Promise<void> {
     // Unread atoms stay as they are: this load never writes over them.
   }
   try {
+    await restorePanel($, s)
+  } catch {
+    // boot fills the pane again.
+  }
+  try {
     s.routedTotal += sum((await stored($)).routes)
   } catch {
     // The count starts from this load's routes.
   }
   try {
     const m = await $.store.get('meter')
-    // Economy is per session, and other sessions write this key too.
-    if (isRecord(m) && m.sessionId === (await $.session.id())) {
+    const sessionId = isRecord(m) ? await $.session.id() : undefined
+    // Economy is per session, and other sessions write this key too. A reading that came in
+    // meanwhile (restore ran past its wait) is newer: it stays.
+    const fresh = s.windows.fiveHour === undefined && s.windows.week === undefined
+    if (isRecord(m) && m.sessionId === sessionId && fresh) {
       s.economy = m.economy === true
       if (isCount(m.economySince)) s.economySince = m.economySince
       if (isCount(m.lastFiveHour)) s.windows.fiveHour = m.lastFiveHour
       if (isCount(m.lastWeek)) s.windows.week = m.lastWeek
-      b.meter = JSON.stringify(meterOf(s))
+      b.meter = meterText(sessionId, s)
     }
   } catch {
     // Economy comes back with the next reading.
@@ -133,23 +174,28 @@ async function write($: EngineInterface, s: Shared, now: number, final: boolean)
       s.dirty = true
     }
   }
-  const meter = meterOf(s)
-  if (JSON.stringify(meter) !== b.meter) {
+  let sessionId: string | undefined
+  try {
+    // Asked each time: after /clear or a resume the same process runs under a new id.
+    sessionId = await $.session.id()
+  } catch {
+    // Stored without it, the record is never restored.
+  }
+  const meter = meterText(sessionId, s)
+  if (meter !== b.meter) {
     try {
-      let sessionId: string | undefined
-      try {
-        sessionId = await $.session.id()
-      } catch {
-        // Stored without it, the record is never restored.
-      }
-      await $.store.set('meter', { ...(sessionId !== undefined ? { sessionId } : {}), ...meter })
-      b.meter = JSON.stringify(meter)
+      await $.store.set('meter', JSON.parse(meter))
+      b.meter = meter
     } catch {
       // The next flush tries again.
     }
   }
-  if (!Object.keys(b.unsaved).length || (!final && now - b.lastWrite < WRITE_GAP_MS)) return
-  // shortcut: a hot reload within the gap loses the counts it held back (no session.end fires); add a trailing $.clock.after if V1/V5 show it.
+  if (!Object.keys(b.unsaved).length) return
+  if (!final && now - b.lastWrite < WRITE_GAP_MS) {
+    // shortcut: a hot reload ends this timer, so it loses what the gap held back (no session.end fires); V1/V5 measure it.
+    later($, s, WRITE_GAP_MS - (now - b.lastWrite))
+    return
+  }
   const add = b.unsaved
   b.unsaved = {}
   try {
@@ -176,6 +222,30 @@ async function stored($: EngineInterface): Promise<{ life: unknown; routes: Rout
     if (isCount(r.since)) routes.since = r.since
   }
   return { life, routes }
+}
+
+// One trailing write per gap, so held-back counts do not wait for session.end.
+function later($: EngineInterface, s: Shared, ms: number): void {
+  const b = book(s)
+  if (b.trailing) return
+  try {
+    b.trailing = $.clock.after(ms, () => {
+      b.trailing = undefined
+      void save($, s)
+    })
+  } catch {
+    // session.end writes them.
+  }
+}
+
+// After /clear or a resume: write the meter again soon, under the new session id.
+export function saveSoon($: EngineInterface, s: Shared): void {
+  later($, s, WRITE_GAP_MS)
+}
+
+// The meter record as JSON text; JSON leaves out an unknown session id.
+function meterText(sessionId: string | undefined, s: Shared): string {
+  return JSON.stringify({ sessionId, ...meterOf(s) })
 }
 
 function meterOf(s: Shared) {

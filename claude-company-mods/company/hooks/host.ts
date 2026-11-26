@@ -7,7 +7,6 @@ import { dietTotal } from './diet'
 import { governedTotal, meterLine, nextEconomy, readWindows } from './governor'
 import { CREW } from './crew'
 import { note, type Shared } from './core'
-import { save } from './persist'
 
 const LABEL: Record<string, string> = { start: 'COMPANY', route: 'ROUTER', governor: 'GOVERNOR', meter: 'METER', diet: 'DIET', crew: 'CREW' }
 
@@ -17,6 +16,23 @@ export const panel = atom({ plugin: 'company', key: 'panel' } as const, EMPTY_PA
 // The validator lets `read` take only an atom made in its own file, so register.tsx reads through here.
 export function readPanel($: EngineInterface) {
   return read($, panel)
+}
+
+// The pane's last snapshot outlives a hot reload: take back what boot and the log filled, so a hook
+// that runs before boot does not draw a blank pane. Fields this load already filled stay.
+export async function restorePanel($: EngineInterface, st: Shared): Promise<void> {
+  const p = await read($, panel)
+  if (!st.version) st.version = p.version
+  if (!st.crew) st.crew = p.crew
+  if (!st.dirs.length && p.directives.length) {
+    st.dirs = p.directives
+    st.directives = directivesNote(Object.fromEntries(p.directives.filter((d) => d.on).map((d) => [d.name, true])))
+  }
+  if (!st.log.length && p.log.length) {
+    st.log = p.log
+    // Lines already posted as chat notices are not posted again.
+    st.seq = st.shown = Math.max(...p.log.map((l) => l.n))
+  }
 }
 
 export function showStatus($: EngineInterface, st: Shared): void {
@@ -151,6 +167,4 @@ export async function applyLimits($: EngineInterface, st: Shared, limits: unknow
     // Leave the previous values.
   }
   showStatus($, st)
-  // The meter goes to $.store from persist.ts, so economy survives a reload.
-  await save($, st)
 }

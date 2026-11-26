@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { acted, added, capText, createShared, cutCodePoints, envOff, estimateTokens, fail, noteOf, redact, saved, setOff, setOn, type Ctx } from './core'
+import { acted, added, capText, createShared, cutCodePoints, envOff, estimateTokens, fail, noteOf, redact, resetHealth, saved, setOff, setOn, type Ctx, type ModuleId } from './core'
 import { MODULE_META } from './modules'
 
 function ctxOf(caps: Ctx['caps'] = {}): Ctx {
@@ -75,4 +75,64 @@ test('envOff reads known module ids from COMPANY_OFF', () => {
   expect(envOff(' rtk, graph ,nope,rtk')).toEqual(['rtk', 'graph'])
   expect(envOff('')).toEqual([])
   expect(envOff(undefined)).toEqual([])
+})
+
+test('redact hides JSON, quoted, Bearer and nested-@ secrets and removes direction marks', () => {
+  expect(redact('{"api_key": "sk-abc123"}')).toBe('{"api_key": ***}')
+  expect(redact("password='hunter 2' ok")).toBe('password=*** ok')
+  expect(redact('https://u:p@ss@h/x')).toBe('https://***@h/x')
+  expect(redact('Authorization: Bearer abc.DEF-123_x')).toBe('Authorization: Bearer ***')
+  expect(redact('a=api_key=s3cr3t')).toBe('a=api_key=***')
+  const marks = String.fromCharCode(0x200e, 0x200f, 0x061c)
+  expect(redact(`a${marks}b`)).toBe('ab')
+})
+
+test('redact stays fast on hostile text', () => {
+  for (const s of ['key-'.repeat(25000), 'a-'.repeat(50000), 'key="'.repeat(20000), '//' + '@'.repeat(100000)]) {
+    const t = Date.now()
+    redact(s)
+    expect(Date.now() - t).toBeLessThan(500)
+  }
+})
+
+function two() {
+  const shared = createShared(MODULE_META.map((m) => m.id))
+  const of = (id: ModuleId): Ctx => ({ id, caps: {}, shared })
+  return { shared, inner: of('rtk'), outer: of('bashcap') }
+}
+
+test('an error counts once: an outer module skips what an inner module counted', () => {
+  const { shared, inner, outer } = two()
+  const err = new Error('rtk broke')
+  fail(inner, err)
+  fail(outer, err)
+  // The engine hands the outer guard a rebuilt error with the same message.
+  fail(outer, new Error(err.message))
+  expect(shared.health.rtk).toMatchObject({ fails: 1, lastErr: 'Error: rtk broke' })
+  expect(shared.health.bashcap).toEqual({ on: true, fails: 0, streak: 0 })
+  fail(outer, new Error('bashcap broke'))
+  expect(shared.health.bashcap.fails).toBe(1)
+})
+
+test('an error without a text still counts and trips the breaker', () => {
+  const { shared, inner } = two()
+  for (let i = 0; i < 3; i++) fail(inner, Object.create(null))
+  expect(shared.health.rtk).toMatchObject({ on: false, off: 'errors', fails: 3, lastErr: 'unprintable error' })
+})
+
+test('resetHealth after /clear clears counts and error switch-offs; other reasons hold', () => {
+  const { shared, inner, outer } = two()
+  for (let i = 0; i < 3; i++) fail(inner, new Error(`boom ${i}`))
+  fail(outer, new Error('once'))
+  const graph: Ctx = { id: 'graph', caps: {}, shared }
+  const nudge: Ctx = { id: 'nudge', caps: {}, shared }
+  setOff(graph, 'not installed')
+  setOff(nudge, 'env')
+  shared.dirty = false
+  resetHealth(shared)
+  expect(shared.health.rtk).toEqual({ on: true, fails: 0, streak: 0 })
+  expect(shared.health.bashcap).toEqual({ on: true, fails: 0, streak: 0 })
+  expect(shared.health.graph).toMatchObject({ on: false, off: 'not installed' })
+  expect(shared.health.nudge).toMatchObject({ on: false, off: 'env' })
+  expect(shared.dirty).toBe(true)
 })

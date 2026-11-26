@@ -6,8 +6,11 @@ import { GREP_LINES, READ_LINES, dietPrompt, readNote, recordDiet, shouldCapRead
 import { routeSpawn, type Route } from './router'
 import { governEffort, modelFamily, recordGoverned } from './governor'
 import { applyLimits, boot, readPanel, showStatus } from './host'
-import { createShared, envOff, note, noteOf, setOff, type Ctx, type ModuleId } from './core'
+import { createShared, envOff, note, noteOf, resetHealth, setOff, type Ctx, type ModuleId } from './core'
 import { MODULE_META } from './modules'
+
+// The module id each register<Name> call below takes, in call order; a test compares it with MODULE_META.
+export const MODULE_CALLS: ModuleId[] = []
 
 export const register: Register = (on, options) => {
   let routedThisSession = 0
@@ -39,6 +42,12 @@ export const register: Register = (on, options) => {
     } catch {
       // The command is a convenience; the mod works without it.
     }
+    return next(e)
+  })
+
+  on('session.end', async ($, e, next) => {
+    // A /clear or a resume starts a new conversation, and no session.start fires for it.
+    if (e.reason === 'clear' || e.reason === 'resume') resetHealth(st)
     return next(e)
   })
 
@@ -289,8 +298,7 @@ export const register: Register = (on, options) => {
   })
 
   // Module hooks nest beneath the hooks above, in MODULE_META order: each port adds its
-  // `register<Name>(on, use('<id>'))` call here. The returned order is checked by a test.
-  const order: ModuleId[] = []
-  const use = (id: ModuleId): Ctx => (order.push(id), ctx[id])
-  return order
+  // `register<Name>(on, use('<id>'))` call here.
+  MODULE_CALLS.length = 0
+  const use = (id: ModuleId): Ctx => (MODULE_CALLS.push(id), ctx[id])
 }

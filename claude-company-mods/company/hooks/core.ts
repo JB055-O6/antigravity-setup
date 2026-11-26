@@ -61,14 +61,47 @@ export function isOn(ctx: Ctx): boolean {
   return ctx.shared.health[ctx.id].on
 }
 
+// An inner module's error also rejects the outer guards' `next`. The engine rebuilds the
+// error but keeps its message, so this tag on the message stops them counting it again.
+const COUNTED = ' [company: counted]'
+
 // One more failure in a row; FAIL_LIMIT in a row turns the module off for this session.
 export function fail(ctx: Ctx, err: unknown): void {
+  let text = 'unprintable error'
+  try {
+    text = String(err)
+  } catch {
+    // An error without a text still counts.
+  }
+  if (text.includes(COUNTED)) return
   const h = ctx.shared.health[ctx.id]
   h.fails += 1
   h.streak += 1
-  h.lastErr = cutCodePoints(redact(String(err)), 120)
+  h.lastErr = cutCodePoints(redact(text), 120)
   ctx.shared.dirty = true
   if (h.streak >= FAIL_LIMIT) setOff(ctx, 'errors')
+  // shortcut: a thrown string or a frozen error cannot carry the tag, so outer modules count it too; modules throw Error objects.
+  try {
+    const e = err as { message?: unknown }
+    if (typeof e.message === 'string') e.message += COUNTED
+  } catch {
+    // The tag is best-effort.
+  }
+}
+
+// A /clear or a resume starts a new conversation and fires no session.start: counts and
+// switch-offs for errors start over. Other reasons (env, not installed, cloud, devices) still hold.
+export function resetHealth(s: Shared): void {
+  for (const h of Object.values(s.health)) {
+    h.fails = 0
+    h.streak = 0
+    delete h.lastErr
+    if (h.off === 'errors') {
+      h.on = true
+      delete h.off
+    }
+  }
+  s.dirty = true
 }
 
 export function ok(ctx: Ctx): void {
@@ -141,9 +174,11 @@ export function estimateTokens(chars: number): number {
 export function redact(s: string): string {
   return s
     .replace(/[\t\n\r]/g, ' ')
-    .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '')
-    .replace(/(\/\/)[^\s/@]+@/g, '$1***@')
-    .replace(/\b([\w.-]{0,40}(?:key|token|secret|password)[\w.-]{0,40}\s*[:=]\s*)(["']?)[^\s"'&;,]+/gi, '$1$2***')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/(\/\/)[^\s/]*@/g, '$1***@')
+    .replace(/\bBearer\s+[\w.~+/=-]{8,}/gi, 'Bearer ***')
+    // (?=(...))\1 takes the name whole, with no backtracking into it, so the time stays linear.
+    .replace(/\b(?=([\w.-]{0,60}?(?:key|token|secret|password)[\w.-]{0,60}))\1(["']?\s*[:=]\s*)(?:"[^"]{0,200}"?|'[^']{0,200}'?|[^\s"'&;,]+)/gi, '$1$2***')
     .replace(/[\w+=-]{32,}/g, (m) => (/\d/.test(m) && /[a-z]/i.test(m) ? '***' : m))
 }
 

@@ -1,8 +1,8 @@
 import type { EngineInterface, MatchedHook, On, StreamHook } from 'claude-code'
 import { expect, mock, test, type Plugin } from 'claude-code/testing'
-import { createShared, fail, isOn, ok, setOff, type Ctx, type ModuleId } from './core'
+import { createShared, fail, isOn, ok, setOff, type Ctx } from './core'
 import { MODULE_META } from './modules'
-import { register } from './register'
+import { MODULE_CALLS, register } from './register'
 
 // ---- the engine: a throw in a plugin's hooks never runs the tool or the step twice ----
 
@@ -175,6 +175,29 @@ test('a success resets the streak', async ($, on) => {
   expect(p.health()).toMatchObject({ on: true, fails: 3, streak: 1 })
 })
 
+// An inner module's error also rejects the outer guard's `next`: only the inner one counts it.
+test('an inner module failure counts once, against the inner module only', async ($, on) => {
+  mock.store(on)
+  on('ui.status', () => ({ value: undefined }))
+  const shared = createShared(MODULE_META.map((m) => m.id))
+  const inner: How = { mode: 'before' }
+  registerProbe(on, { id: 'bashcap', caps: {}, shared }, { mode: 'pass' })
+  registerProbe(on, { id: 'rtk', caps: {}, shared }, inner)
+  bashEngine(on)
+  on('turn.step', async function* (_, e) {
+    yield { kind: 'text', index: 0, text: 'a' }
+    return { turnId: e.turnId, index: e.index, answer: 'a', toolUses: [], stopReason: 'end_turn', usage: null } as never
+  })
+  await $.tool.call({ tool: 'Bash', command: 'ls' }).catch(() => undefined)
+  inner.mode = 'after'
+  await $.tool.call({ tool: 'Bash', command: 'ls' }).catch(() => undefined)
+  inner.mode = 'mid'
+  for await (const _ of $.turn.step({ ...STEP })) void _
+  expect(shared.health.rtk).toMatchObject({ on: false, off: 'errors', fails: 3, streak: 3 })
+  expect(shared.health.rtk.lastErr).toBe('Error: probe broke mid stream')
+  expect(shared.health.bashcap).toEqual({ on: true, fails: 0, streak: 0 })
+})
+
 // ---- the host ----
 
 // Modules share an event through `{}` on every hook after the first: both must fire.
@@ -208,8 +231,21 @@ test('a plain hook and a {} hook on one event both fire on every event', async (
 test('register.tsx calls the module register functions in MODULE_META order', () => {
   const ids = MODULE_META.map((m) => m.id)
   expect(ids).toEqual(['charter', 'meter', 'router', 'governor', 'diet', 'bashcap', 'rtk', 'graph', 'audit', 'nudge', 'install', 'dashboard'])
-  const order = register((() => ({})) as never, {} as never) as ModuleId[]
-  expect(order).toEqual(ids.filter((id) => order.includes(id)))
+  // This file's own copy of the module: registering fills MODULE_CALLS from the real calls.
+  register((() => ({})) as never, {} as never)
+  expect(MODULE_CALLS).toEqual(ids.filter((id) => MODULE_CALLS.includes(id)))
+})
+
+test('session.end after /clear or resume passes through', async ($, on) => {
+  const ended: string[] = []
+  on('session.end', (_, e) => {
+    ended.push(e.reason)
+    return { sessionId: e.sessionId }
+  })
+  for (const reason of ['clear', 'resume', 'prompt_input_exit'] as const) {
+    expect(await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } })).toEqual({ sessionId: 's1' })
+  }
+  expect(ended).toEqual(['clear', 'resume', 'prompt_input_exit'])
 })
 
 test('COMPANY_OFF=rtk turns rtk off with reason env', async ($, on) => {

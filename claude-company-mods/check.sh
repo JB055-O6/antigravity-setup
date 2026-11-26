@@ -9,8 +9,9 @@ run() { # name, cmd...
   return 0
 }
 if run TEST claude plugin test "$R"; then
-  echo "TEST OK $(echo "$out" | grep -oE '[0-9]+ pass' | head -1) 0 fail" | sed 's/ pass 0/ pass 0/'
+  n=$(echo "$out" | grep -oE '[0-9]+ pass' | tail -1)
+  if [ -n "$n" ]; then echo "TEST OK $n 0 fail"; else echo "FAIL test"; echo "$out" | tail -20; rc=1; fi
 fi
 run VALIDATE claude plugin validate "$R" && echo "VALIDATE OK"
-run TSC npx -y tsc -p "$R" --noEmit && echo "TSC OK"
+run TSC npx -y -p typescript tsc -p "$R" --noEmit && echo "TSC OK"
 exit $rc

@@ -8,7 +8,7 @@ import { governEffort, modelFamily, recordGoverned } from './governor'
 import { applyLimits, boot, readPanel, showStatus } from './host'
 import { createShared, envOff, note, noteOf, resetHealth, setOff, type Ctx, type ModuleId } from './core'
 import { MODULE_META } from './modules'
-import { countRoute, finalFlush, ready, save, saveSoon } from './persist'
+import { countRoute, finalFlush, newSession, ready, save } from './persist'
 
 // The module id each register<Name> call below takes, in call order; a test compares it with MODULE_META.
 export const MODULE_CALLS: ModuleId[] = []
@@ -18,8 +18,9 @@ export const register: Register = (on, options) => {
   // State every hook and module shares; `st.economy` and `st.efforts` are read synchronously by turn.step.
   const st = createShared(MODULE_META.map((m) => m.id))
   const ctx = Object.fromEntries(MODULE_META.map((m) => [m.id, { id: m.id, caps: m.caps, shared: st }])) as Record<ModuleId, Ctx>
-  // Every hook but ui.render (a draw) starts with `await ready($, st)`: persisted state, loaded
-  // once by whichever hook runs first after this register.
+  // Every hook but ui.render (a draw) and session.end (a short bound) starts with
+  // `await ready($, st)`: persisted state, loaded once by whichever hook runs first after register.
+  // Writes are `void save`: a store that hangs never holds up a hook.
 
   on('session.start', async ($, e, next) => {
     await ready($, st)
@@ -33,7 +34,7 @@ export const register: Register = (on, options) => {
       // No variable to read: every module stays on.
     }
     await boot($, st)
-    await save($, st)
+    void save($, st)
     // The live pane opens by itself on the desktop app; /company opens it anywhere.
     if (e.surface === 'desktop') void $.ui.open({ id: PANE_ID, title: 'Company' }).then((o) => { st.paneShown = o.isPlaced }).catch(() => {})
     try {
@@ -49,13 +50,13 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    await ready($, st)
     // A /clear or a resume starts a new conversation, and no session.start fires for it.
-    if (e.reason === 'clear' || e.reason === 'resume') resetHealth(st)
-    // Writes what the 2 s gap held back. Never throws.
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      resetHealth(st)
+      newSession(st)
+    }
+    // No wait for restore here: the whole chain has 1.5 s. Writes what memory holds. Never throws.
     await finalFlush($, st)
-    // The new conversation has a new session id: store the meter under it.
-    if (e.reason === 'clear' || e.reason === 'resume') saveSoon($, st)
     return next(e)
   })
 
@@ -63,7 +64,7 @@ export const register: Register = (on, options) => {
     await ready($, st)
     await boot($, st)
     showStatus($, st)
-    await save($, st)
+    void save($, st)
     let placed = 'Panel: could not be opened.'
     try {
       const o = await $.ui.open({ id: PANE_ID, title: 'Company' })
@@ -93,7 +94,7 @@ export const register: Register = (on, options) => {
       // Keep the previous values.
     }
     // The meter goes to $.store, so economy survives a reload.
-    await save($, st)
+    void save($, st)
     return next(e)
   })
 
@@ -280,6 +281,8 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: 'company' }, async ($, e) => {
     const ui = $.ui.resolve(e)
+    // A pane that draws is on screen, a reload or not: no chat notices beside it.
+    st.paneShown = true
     return PanelView(ui, await readPanel($))
   })
 

@@ -16,6 +16,8 @@ const MODELS: readonly Model[] = ['haiku', 'sonnet', 'opus', 'fable']
 export const WRITE_GAP_MS = 2000
 // The longest a hook waits for restore, once per load; then it goes on from memory.
 export const RESTORE_WAIT_MS = 1500
+// The final write's share of session.end's short bound (1.5 s for the whole chain).
+export const FINAL_WAIT_MS = 1000
 
 export const EMPTY_LEDGER: Partial<Record<string, StoredEntry>> = {}
 export const EMPTY_HEALTH: Partial<Record<string, StoredHealth>> = {}
@@ -33,6 +35,12 @@ type Book = {
   restoring?: Promise<void>
   // restore finished, or a hook already waited RESTORE_WAIT_MS for it: no hook waits again.
   settled: boolean
+  // restore finished: the meter in memory is this session's, not a blank one.
+  restored: boolean
+  // A /clear or a resume ended the conversation: its health is not restored, and the next hook
+  // stores the meter under the new session id.
+  cleared: boolean
+  resave: boolean
   // The atoms were read, so a write never puts a blank copy over them.
   atomsRead: boolean
   // Routes counted and not yet in `lifetime`.
@@ -49,7 +57,7 @@ const books = new WeakMap<Shared, Book>()
 function book(s: Shared): Book {
   let b = books.get(s)
   if (!b) {
-    b = { settled: false, atomsRead: false, unsaved: {}, lastWrite: -Infinity, meter: meterText(undefined, s), writing: Promise.resolve() }
+    b = { settled: false, restored: false, cleared: false, resave: false, atomsRead: false, unsaved: {}, lastWrite: -Infinity, meter: meterText(undefined, s), writing: Promise.resolve() }
     books.set(s, b)
   }
   return b
@@ -60,20 +68,31 @@ function book(s: Shared): Book {
 // hanging read never stalls a hook; restore then ends in the background. Never throws.
 export async function ready($: EngineInterface, s: Shared): Promise<void> {
   const b = book(s)
-  if (b.settled) return
-  b.restoring ??= restore($, s).finally(() => {
-    b.settled = true
-  })
-  const stop = new AbortController()
-  // A clock that cannot wait leaves the wait to restore alone.
-  const timeout = $.clock.sleep(RESTORE_WAIT_MS, { signal: stop.signal }).then(
-    () => {
+  if (!b.settled) {
+    b.restoring ??= restore($, s).finally(() => {
       b.settled = true
+    })
+    if (await within($, b.restoring, RESTORE_WAIT_MS)) b.settled = true
+  }
+  if (b.resave && b.restored) {
+    b.resave = false
+    void save($, s)
+  }
+}
+
+// Waits for `p` at most `ms`; true when the time ran out. A clock that cannot wait leaves the wait to `p`.
+async function within($: EngineInterface, p: Promise<void>, ms: number): Promise<boolean> {
+  const stop = new AbortController()
+  let late = false
+  const timeout = $.clock.sleep(ms, { signal: stop.signal }).then(
+    () => {
+      late = true
     },
     () => new Promise<void>(() => {}),
   )
-  await Promise.race([b.restoring, timeout])
+  await Promise.race([p, timeout])
   stop.abort()
+  return late
 }
 
 // Load once: atoms, the pane's snapshot, then `lifetime` (or the old `routes`), then `meter`.
@@ -91,7 +110,7 @@ export async function restore($: EngineInterface, s: Shared): Promise<void> {
         s.ledger[id].acted += e.acted
       }
       const h = health[id]
-      if (isHealth(h)) s.health[id] = { ...h }
+      if (isHealth(h) && !b.cleared) s.health[id] = mergeHealth(s.health[id], h)
     }
     b.atomsRead = true
   } catch {
@@ -123,6 +142,29 @@ export async function restore($: EngineInterface, s: Shared): Promise<void> {
   } catch {
     // Economy comes back with the next reading.
   }
+  b.restored = true
+}
+
+// Stored health under what this load did since register (a restore past its wait comes late):
+// an off or a failure in memory stays, the stored ones are added.
+function mergeHealth(m: Health, h: Health): Health {
+  const off = m.on ? h.off : m.off
+  const lastErr = m.lastErr ?? h.lastErr
+  return {
+    on: m.on && h.on,
+    fails: m.fails + h.fails,
+    // A streak since load is the newest; with no failure since load, the stored one stands.
+    streak: m.fails > 0 ? m.streak : h.streak,
+    ...(lastErr !== undefined ? { lastErr } : {}),
+    ...(off !== undefined ? { off } : {}),
+  }
+}
+
+// A /clear or a resume (session.end): mark the conversation as ended.
+export function newSession(s: Shared): void {
+  const b = book(s)
+  b.cleared = true
+  b.resave = true
 }
 
 // One routed spawn, counted in memory: no store read per spawn. A flush writes it.
@@ -137,9 +179,10 @@ export function flush($: EngineInterface, s: Shared, now: number): Promise<void>
   return queue($, s, now, false)
 }
 
-// On session.end: everything, the gap ignored.
+// On session.end: what memory holds, the gap ignored, started at once (no wait for restore, no
+// timer), within FINAL_WAIT_MS. It waits only behind a write already under way.
 export async function finalFlush($: EngineInterface, s: Shared): Promise<void> {
-  return queue($, s, await clock($), true)
+  await within($, clock($).then((now) => queue($, s, now, true)), FINAL_WAIT_MS)
 }
 
 // A flush at the engine's time, for hooks.
@@ -182,7 +225,8 @@ async function write($: EngineInterface, s: Shared, now: number, final: boolean)
     // Stored without it, the record is never restored.
   }
   const meter = meterText(sessionId, s)
-  if (meter !== b.meter) {
+  // Before restore ends, memory holds a blank meter: it never goes over this session's record.
+  if (meter !== b.meter && b.restored) {
     try {
       await $.store.set('meter', JSON.parse(meter))
       b.meter = meter
@@ -236,11 +280,6 @@ function later($: EngineInterface, s: Shared, ms: number): void {
   } catch {
     // session.end writes them.
   }
-}
-
-// After /clear or a resume: write the meter again soon, under the new session id.
-export function saveSoon($: EngineInterface, s: Shared): void {
-  later($, s, WRITE_GAP_MS)
 }
 
 // The meter record as JSON text; JSON leaves out an unknown session id.

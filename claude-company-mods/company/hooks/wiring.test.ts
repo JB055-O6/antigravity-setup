@@ -268,7 +268,7 @@ test('meter: session.measure turns economy on and off with hysteresis; one toast
     held[e.key] = e.value
     return { value: undefined }
   })
-  on('clock.now', () => ({ value: 5000 }))
+  const clock = mock.clock(on, { now: 5000 })
   const toasts: string[] = []
   on('ui.toast', (_, e) => {
     toasts.push(e.text)
@@ -280,8 +280,9 @@ test('meter: session.measure turns economy on and off with hysteresis; one toast
     return { value: undefined }
   })
   on('session.measure', (_, e) => ({ changed: e.changed }))
-  const measure = (five: number, week: number) =>
-    $.session.measure({
+  // The hook does not wait for its store write; settle lets it land.
+  const measure = async (five: number, week: number) => {
+    await $.session.measure({
       context: { window: 200000 },
       rateLimits: [
         { kind: 'five_hour', percentUsed: five },
@@ -289,6 +290,8 @@ test('meter: session.measure turns economy on and off with hysteresis; one toast
       ],
       changed: ['rateLimits'],
     } as never)
+    await clock.settle()
+  }
   await measure(50, 50)
   expect(toasts).toHaveLength(0)
   await measure(90, 50)

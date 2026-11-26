@@ -135,10 +135,10 @@ test('two parallel spawns count 2 routes', async ($, on) => {
 test('another session that shares the store keeps its counts; the old routes tally moves into lifetime', async ($, on) => {
   const { statuses } = engine(on)
   const held = store(on, { routes: { haiku: 5, sonnet: 1, opus: 0, fable: 0, since: 10 } })
-  on('clock.now', () => ({ value: 1000 }))
+  const clock = mock.clock(on, { now: 1000 })
   await $.agent.spawn({ ...SPAWN })
-  // A measure push waits for the write the spawn started.
-  await $.session.measure({ context: { window: 1 }, rateLimits: [], changed: ['rateLimits'] } as never)
+  // The spawn does not wait for its write; let it land.
+  await clock.settle()
   expect((held.lifetime as { routes: unknown }).routes).toEqual({ haiku: 6, sonnet: 1, opus: 0, fable: 0, since: 10 })
   expect(statuses[statuses.length - 1]).toContain('7 subagents routed')
   // A parallel session adds its own counts to the shared file meanwhile.
@@ -229,16 +229,93 @@ test('a count the 2 s gap held back is written when the gap ends', async ($, on)
   expect((held.lifetime as { routes: { haiku: number } }).routes.haiku).toBe(2)
 })
 
+const COMPOSE = { model: 'opus', promptModel: 'opus', surfaces: ['terminal'], tools: [], outputStyle: null, traits: [] } as const
+
 test('after /clear the meter is stored under the new session id', async ($, on) => {
   engine(on)
   const held = store(on)
   const clock = mock.clock(on, { now: 1000 })
+  on('prompt.compose', () => ({ sections: [] }))
   let id = 's1'
   on('session.id', () => ({ value: id }))
   await $.session.measure({ context: { window: 1 }, rateLimits: [{ kind: 'five_hour', percentUsed: 91 }], changed: ['rateLimits'] } as never)
+  await clock.settle()
   expect(held.meter).toMatchObject({ sessionId: 's1', economy: true })
   await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
   id = 's2'
-  await clock.advance(2000)
+  // The new conversation's first hook writes it; no timer has to outlive session.end.
+  await $.prompt.compose({ ...COMPOSE })
+  await clock.settle()
   expect(held.meter).toMatchObject({ sessionId: 's2', economy: true })
+})
+
+test('a restore that comes late keeps the health this load set meanwhile', async ($, on) => {
+  engine(on)
+  store(on)
+  mock.env(on, { COMPANY_OFF: 'graph' })
+  const clock = mock.clock(on, { now: 1000 })
+  // The first atom read hangs past the wait (this hook sits above the state below it);
+  // session.start goes on and sets graph off.
+  let release = () => {}
+  const late = new Promise<void>((r) => (release = r))
+  on('state.get', { key: 'ledger' }, async (_, e, next) => (await late, next(e)))
+  const held = state(on, {
+    health: {
+      value: {
+        shape: 'health-1',
+        value: { rtk: { on: false, fails: 3, streak: 3, lastErr: 'Error: boom', off: 'errors' }, graph: { on: true, fails: 1, streak: 1 } },
+      },
+      version: 4,
+    },
+  })
+  let done = false
+  const started = $.session.start({ ...START }).then(() => (done = true))
+  await clock.advance(1000)
+  expect(done).toBe(false)
+  await clock.advance(500)
+  await started
+  release()
+  await clock.settle()
+  await $.session.end({ ...END })
+  const health = (held.health!.value as { value: Record<string, unknown> }).value
+  expect(health.graph).toEqual({ on: false, fails: 1, streak: 1, off: 'env' })
+  expect(health.rtk).toEqual({ on: false, fails: 3, streak: 3, lastErr: 'Error: boom', off: 'errors' })
+})
+
+test('session.end writes at once, within its bound, when the store hangs', async ($, on) => {
+  engine(on)
+  const clock = mock.clock(on, { now: 1000 })
+  let gets = 0
+  on('store.get', () => (gets++, new Promise(() => {})))
+  on('store.set', () => ({ value: undefined }))
+  // session.end is the first hook of this load: it starts no restore and waits for none.
+  const ended = $.session.end({ ...END })
+  await clock.advance(1000)
+  expect(await ended).toEqual({ sessionId: 's1' })
+  expect(gets).toBe(0)
+})
+
+test('a pane that draws after a reload stops the chat notices', async ($, on) => {
+  engine(on)
+  store(on)
+  const notices: string[] = []
+  on('session.append', (_, e, next) => (notices.push(String((e.message.content as any)[0]?.text ?? '')), next(e)))
+  const pane = await $.ui.mount({
+    plugin: 'company', component: 'Pane', requestId: 'company', surface: 'desktop',
+    props: { title: 'Company', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+  } as never)
+  await $.agent.spawn({ ...SPAWN })
+  expect(notices).toEqual([])
+  await pane.unmount()
+})
+
+test('a hanging store write never holds up session.measure', async ($, on) => {
+  engine(on)
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => new Promise(() => {}))
+  const measure = (five: number) =>
+    $.session.measure({ context: { window: 1 }, rateLimits: [{ kind: 'five_hour', percentUsed: five }], changed: ['rateLimits'] } as never)
+  // The first write hangs; the next measure's write queues behind it, and neither hook waits.
+  expect(await measure(50)).toEqual({ changed: ['rateLimits'] })
+  expect(await measure(60)).toEqual({ changed: ['rateLimits'] })
 })

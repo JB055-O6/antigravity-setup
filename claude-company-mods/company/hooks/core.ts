@@ -6,7 +6,8 @@ const IDS = ['charter', 'meter', 'router', 'governor', 'diet', 'bashcap', 'rtk',
 export type ModuleId = (typeof IDS)[number]
 // Chars (code points) a module may put into context, per shape.
 export type Caps = { section?: number; subagentPrompt?: number; toolContext?: number }
-export type OffReason = 'errors' | 'not installed' | 'device attached' | 'cloud' | 'env'
+export const OFF_REASONS = ['errors', 'not installed', 'device attached', 'cloud', 'env'] as const
+export type OffReason = (typeof OFF_REASONS)[number]
 export type Health = { on: boolean; fails: number; streak: number; lastErr?: string; off?: OffReason }
 // Tokens, estimates.
 export type Entry = { added: number; saved: number; acted: number }

@@ -16,8 +16,17 @@ export type Panel = {
   runs: CrewRun[]
 }
 
+// As stored, per module id (core.ts holds the exact types; persist.ts checks what it reads back).
+export type StoredEntry = { added: number; saved: number; acted: number }
+export type StoredHealth = { on: boolean; fails: number; streak: number; lastErr?: string; off?: string }
+
 declare module 'claude-code' {
   interface PluginState {
-    company: { panel: Shaped<Panel> }
+    company: {
+      panel: Shaped<Panel>
+      // This session's; hooks/persist.ts writes both.
+      ledger: Shaped<Partial<Record<string, StoredEntry>>>
+      health: Shaped<Partial<Record<string, StoredHealth>>>
+    }
   }
 }

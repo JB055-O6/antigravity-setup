@@ -124,7 +124,7 @@ test('if routing throws, the spawn goes ahead unchanged', async ($, on) => {
   expect(r.deny).toBeUndefined()
 })
 
-test('the tally under `routes` counts per model, and a failing store never blocks', async ($, on) => {
+test('the tally under `lifetime.routes` counts per model, and a failing store never blocks', async ($, on) => {
   const sets: Array<{ key: string; value: Record<string, number> }> = []
   let held: unknown
   on('store.get', () => ({ value: held }))
@@ -137,13 +137,16 @@ test('the tally under `routes` counts per model, and a failing store never block
   })
   on('ui.status', () => ({ value: undefined }))
   on('clock.now', () => ({ value: 1234 }))
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
   engine(on)
   await $.agent.spawn({ ...SPAWN })
   await $.agent.spawn({ ...SPAWN, description: 'Find the loader again' })
   await $.agent.spawn({ ...SPAWN, description: 'Fix the bug' })
+  // Writes are at most one per 2 s; session.end writes the rest.
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 's1', resume: { id: 's1' } })
   const last = sets[sets.length - 1]!
-  expect(last.key).toBe('routes')
-  expect(last.value).toEqual({ haiku: 2, sonnet: 1, opus: 0, fable: 0, since: 1234 })
+  expect(last.key).toBe('lifetime')
+  expect((last.value as unknown as { routes: unknown }).routes).toEqual({ haiku: 2, sonnet: 1, opus: 0, fable: 0, since: 1234 })
 
   failing = true
   const r = await $.agent.spawn({ ...SPAWN })
@@ -291,14 +294,14 @@ test('meter: session.measure turns economy on and off with hysteresis; one toast
   await measure(90, 50)
   expect(toasts).toHaveLength(1)
   expect(toasts[0]).toContain('five-hour')
-  expect(held.meter).toEqual({ economySince: 5000, lastFiveHour: 90, lastWeek: 50 })
+  expect(held.meter).toEqual({ economy: true, economySince: 5000, lastFiveHour: 90, lastWeek: 50 })
   await measure(88, 50)
   await measure(86, 50)
   expect(toasts).toHaveLength(1)
   await measure(84, 50)
   expect(toasts).toHaveLength(2)
   expect(toasts[1]).toContain('off')
-  expect(held.meter).toEqual({ lastFiveHour: 84, lastWeek: 50 })
+  expect(held.meter).toEqual({ economy: false, lastFiveHour: 84, lastWeek: 50 })
   await measure(10, 85)
   expect(toasts).toHaveLength(3)
   expect(toasts[2]).toContain('weekly')

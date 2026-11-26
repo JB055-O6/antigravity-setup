@@ -7,6 +7,7 @@ import { dietTotal } from './diet'
 import { governedTotal, meterLine, nextEconomy, readWindows } from './governor'
 import { CREW } from './crew'
 import { note, type Shared } from './core'
+import { save } from './persist'
 
 const LABEL: Record<string, string> = { start: 'COMPANY', route: 'ROUTER', governor: 'GOVERNOR', meter: 'METER', diet: 'DIET', crew: 'CREW' }
 
@@ -143,16 +144,13 @@ export async function applyLimits($: EngineInterface, st: Shared, limits: unknow
     try {
       if (st.economy && !was) st.economySince = Number(await $.clock.now())
       if (!st.economy) st.economySince = undefined
-      await $.store.set('meter', {
-        ...(st.economySince !== undefined ? { economySince: st.economySince } : {}),
-        ...(w.fiveHour !== undefined ? { lastFiveHour: w.fiveHour } : {}),
-        ...(w.week !== undefined ? { lastWeek: w.week } : {}),
-      })
     } catch {
-      // Persisting is best-effort.
+      // The start time is only shown.
     }
   } catch {
     // Leave the previous values.
   }
   showStatus($, st)
+  // The meter goes to $.store from persist.ts, so economy survives a reload.
+  await save($, st)
 }

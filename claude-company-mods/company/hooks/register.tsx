@@ -8,19 +8,22 @@ import { governEffort, modelFamily, recordGoverned } from './governor'
 import { applyLimits, boot, readPanel, showStatus } from './host'
 import { createShared, envOff, note, noteOf, resetHealth, setOff, type Ctx, type ModuleId } from './core'
 import { MODULE_META } from './modules'
+import { countRoute, finalFlush, restore, save } from './persist'
 
 // The module id each register<Name> call below takes, in call order; a test compares it with MODULE_META.
 export const MODULE_CALLS: ModuleId[] = []
 
 export const register: Register = (on, options) => {
-  let routedThisSession = 0
-  let routedTotal = 0
   let fableWarned = false
   // State every hook and module shares; `st.economy` and `st.efforts` are read synchronously by turn.step.
   const st = createShared(MODULE_META.map((m) => m.id))
   const ctx = Object.fromEntries(MODULE_META.map((m) => [m.id, { id: m.id, caps: m.caps, shared: st }])) as Record<ModuleId, Ctx>
+  // Loaded once, by whichever hook runs first after this register: a reload need not start with
+  // session.start. Every hook awaits it but turn.step (memory only) and ui.render (a draw).
+  let restoring: Promise<void> | undefined
 
   on('session.start', async ($, e, next) => {
+    await (restoring ??= restore($, st))
     // Read once per session: the modules COMPANY_OFF names start off.
     try {
       for (const id of envOff(await $.env.get('COMPANY_OFF'))) {
@@ -46,12 +49,16 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
+    await (restoring ??= restore($, st))
     // A /clear or a resume starts a new conversation, and no session.start fires for it.
     if (e.reason === 'clear' || e.reason === 'resume') resetHealth(st)
+    // Writes what the 2 s gap held back. Never throws.
+    await finalFlush($, st)
     return next(e)
   })
 
   on('command.run', { command: 'company' }, async ($) => {
+    await (restoring ??= restore($, st))
     await boot($, st)
     showStatus($, st)
     let placed = 'Panel: could not be opened.'
@@ -68,12 +75,14 @@ export const register: Register = (on, options) => {
   })
 
   on('session.attach', async ($, e, next) => {
+    await (restoring ??= restore($, st))
     // A cloud session gets its screen after it starts: open the pane when a desktop app attaches.
     if (e.surface === 'desktop') void $.ui.open({ id: PANE_ID, title: 'Company' }).then((o) => { st.paneShown = o.isPlaced }).catch(() => {})
     return next(e)
   })
 
   on('session.measure', async ($, e, next) => {
+    await (restoring ??= restore($, st))
     // Pushed figures: refresh from them. Never blocks.
     try {
       await applyLimits($, st, e.rateLimits)
@@ -84,6 +93,7 @@ export const register: Register = (on, options) => {
   })
 
   on('agent.spawn', async ($, e, next) => {
+    await (restoring ??= restore($, st))
     // Not a guard: if anything here throws, the spawn goes ahead unchanged.
     let route: Route | null = null
     let prompt: string | null = null
@@ -139,27 +149,9 @@ export const register: Register = (on, options) => {
         }
         if (route) {
           if (result.agentId) st.efforts.set(result.agentId, route.effort)
-          routedThisSession += 1
-          let total = routedThisSession
-          try {
-            const old = (await $.store.get('routes')) as
-              | Record<string, number>
-              | undefined
-            const t = {
-              haiku: 0,
-              sonnet: 0,
-              opus: 0,
-              fable: 0,
-              since: await $.clock.now(),
-              ...(old && typeof old === 'object' ? old : {}),
-            }
-            t[route.model] = (Number(t[route.model]) || 0) + 1
-            total = t.haiku + t.sonnet + t.opus + t.fable
-            await $.store.set('routes', t)
-          } catch {
-            // The tally is best-effort.
-          }
-          st.routedTotal = total
+          // In memory, so parallel spawns each count; the store write never holds up the spawn.
+          countRoute(st, route.model)
+          void save($, st)
           note(st, 'route', `${e.subagentType ?? 'subagent'} → ${route.model} ${route.effort} (${route.reason})`)
           showStatus($, st)
         }
@@ -171,6 +163,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Read' }, async ($, e, next) => {
+    await (restoring ??= restore($, st))
     // Not a guard: never denies; on any error the call goes down untouched.
     let size: number | undefined
     try {
@@ -195,6 +188,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Grep' }, async ($, e, next) => {
+    await (restoring ??= restore($, st))
     // Not a guard: never denies.
     if (e.agentId || e.output_mode !== 'content' || e.head_limit != null) return next(e)
     const result = await next({ ...e, head_limit: GREP_LINES })
@@ -262,6 +256,7 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.compose', async ($, e, next) => {
+    await (restoring ??= restore($, st))
     const result = await next(e)
     try {
       return {
@@ -282,6 +277,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    await (restoring ??= restore($, st))
     const result = await next(e)
     try {
       const id = st.runByTool.get(e.tool_use_id)

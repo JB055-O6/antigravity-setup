@@ -61,32 +61,72 @@ export function isOn(ctx: Ctx): boolean {
   return ctx.shared.health[ctx.id].on
 }
 
-// An inner module's error also rejects the outer guards' `next`. The engine rebuilds the
-// error but keeps its message, so this tag on the message stops them counting it again.
-const COUNTED = ' [company: counted]'
+// Errors that came out of a guard's `next`: raised beneath the module (an inner module, core,
+// an API error, an abort), so never the module's own failure.
+const fromBeneath = new WeakSet<object>()
+
+function markBeneath(err: unknown): void {
+  // shortcut: a thrown primitive cannot be held in a WeakSet and counts against the module; the engine throws Error objects.
+  if ((typeof err === 'object' && err !== null) || typeof err === 'function') fromBeneath.add(err)
+}
+
+// `next(e)` for turn.step: the same stream, with errors raised while it is read marked.
+async function* markStream<C, R>(stream: AsyncGenerator<C, R> & { readonly result?: Promise<R> }) {
+  try {
+    return yield* stream
+  } catch (err) {
+    markBeneath(err)
+    throw err
+  }
+}
+
+// The guard hands its helper `beneath(next)`: the same `next`, which marks each error that comes
+// out of it. Property reads (`signal`, `origin`, `event`, `to`) go to `next` unchanged.
+// shortcut: errors from `next.to(...)` are not marked (next is frozen, so a proxy cannot wrap `to`); wrap it if a module uses it.
+export function beneath<T extends (...args: never[]) => unknown>(next: T): T {
+  return new Proxy(next, {
+    apply(target, self, args) {
+      let out: unknown
+      try {
+        out = Reflect.apply(target, self, args)
+      } catch (err) {
+        markBeneath(err)
+        throw err
+      }
+      // A thenable, not `instanceof Promise`: the engine's promise may come from another realm.
+      if (typeof (out as PromiseLike<unknown> | null)?.then === 'function') {
+        return Promise.resolve(out).then(undefined, (err: unknown) => {
+          markBeneath(err)
+          throw err
+        })
+      }
+      const stream = out as AsyncGenerator<unknown, unknown> & { readonly result?: Promise<unknown> }
+      if (stream && typeof stream[Symbol.asyncIterator] === 'function') {
+        // `result` is read only on demand: read early, it rejects unhandled when the stream closes early.
+        return Object.defineProperty(markStream(stream), 'result', { get: () => stream.result })
+      }
+      return out
+    },
+    get: (target, key) => Reflect.get(target, key),
+  })
+}
 
 // One more failure in a row; FAIL_LIMIT in a row turns the module off for this session.
 export function fail(ctx: Ctx, err: unknown): void {
+  // A primitive is never in the set: `has` answers false.
+  if (fromBeneath.has(err as object)) return
   let text = 'unprintable error'
   try {
     text = String(err)
   } catch {
     // An error without a text still counts.
   }
-  if (text.includes(COUNTED)) return
   const h = ctx.shared.health[ctx.id]
   h.fails += 1
   h.streak += 1
   h.lastErr = cutCodePoints(redact(text), 120)
   ctx.shared.dirty = true
   if (h.streak >= FAIL_LIMIT) setOff(ctx, 'errors')
-  // shortcut: a thrown string or a frozen error cannot carry the tag, so outer modules count it too; modules throw Error objects.
-  try {
-    const e = err as { message?: unknown }
-    if (typeof e.message === 'string') e.message += COUNTED
-  } catch {
-    // The tag is best-effort.
-  }
 }
 
 // A /clear or a resume starts a new conversation and fires no session.start: counts and

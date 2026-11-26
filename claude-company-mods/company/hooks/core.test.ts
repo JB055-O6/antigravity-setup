@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { acted, added, capText, createShared, cutCodePoints, envOff, estimateTokens, fail, noteOf, redact, resetHealth, saved, setOff, setOn, type Ctx, type ModuleId } from './core'
+import { acted, added, beneath, capText, createShared, cutCodePoints, envOff, estimateTokens, fail, noteOf, redact, resetHealth, saved, setOff, setOn, type Ctx, type ModuleId } from './core'
 import { MODULE_META } from './modules'
 
 function ctxOf(caps: Ctx['caps'] = {}): Ctx {
@@ -101,17 +101,48 @@ function two() {
   return { shared, inner: of('rtk'), outer: of('bashcap') }
 }
 
-test('an error counts once: an outer module skips what an inner module counted', () => {
-  const { shared, inner, outer } = two()
-  const err = new Error('rtk broke')
-  fail(inner, err)
-  fail(outer, err)
-  // The engine hands the outer guard a rebuilt error with the same message.
-  fail(outer, new Error(err.message))
-  expect(shared.health.rtk).toMatchObject({ fails: 1, lastErr: 'Error: rtk broke' })
-  expect(shared.health.bashcap).toEqual({ on: true, fails: 0, streak: 0 })
-  fail(outer, new Error('bashcap broke'))
-  expect(shared.health.bashcap.fails).toBe(1)
+test('the same Error object counts on every call', () => {
+  const { shared, inner } = two()
+  const err = new Error('start failed')
+  for (let i = 0; i < 3; i++) fail(inner, err)
+  expect(shared.health.rtk).toMatchObject({ on: false, off: 'errors', fails: 3 })
+  expect(err.message).toBe('start failed')
+})
+
+test('beneath(next) marks what comes out of next, so fail skips it', async () => {
+  const { shared, inner } = two()
+  const err = new Error('core broke')
+  const rejects = beneath(async (_: string) => {
+    throw err
+  })
+  const throwsNow = beneath((_: string): Promise<string> => {
+    throw new Error('sync')
+  })
+  const stream = beneath((_: string) =>
+    Object.assign(
+      (async function* () {
+        yield 1
+        throw new Error('stream broke')
+      })(),
+      { result: Promise.resolve(0) },
+    ),
+  )
+  await rejects('x').catch((x) => fail(inner, x))
+  await Promise.resolve()
+    .then(() => throwsNow('x'))
+    .catch((x) => fail(inner, x))
+  const s = stream('x')
+  expect(s.result).toBeInstanceOf(Promise)
+  try {
+    for await (const _ of s) void _
+  } catch (x) {
+    fail(inner, x)
+  }
+  expect(shared.health.rtk).toEqual({ on: true, fails: 0, streak: 0 })
+  // The same error thrown by the module itself, not through next, counts.
+  fail(inner, new Error('own'))
+  expect(shared.health.rtk.fails).toBe(1)
+  expect(await beneath(async (v: string) => `${v}!`)('ok')).toBe('ok!')
 })
 
 test('an error without a text still counts and trips the breaker', () => {

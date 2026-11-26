@@ -1,6 +1,6 @@
 import type { EngineInterface, MatchedHook, On, StreamHook } from 'claude-code'
 import { expect, mock, test, type Plugin } from 'claude-code/testing'
-import { createShared, fail, isOn, ok, setOff, type Ctx } from './core'
+import { beneath, createShared, fail, isOn, ok, setOff, type Ctx } from './core'
 import { MODULE_META } from './modules'
 import { MODULE_CALLS, register } from './register'
 
@@ -78,8 +78,10 @@ test('a throw in the middle of a turn.step stream does not repeat the step', { p
 
 // ---- the guard form and the breaker ----
 
-// Where the probe's helper throws: never, before its `next`, after it, or after the first chunk.
-type How = { mode: 'pass' | 'before' | 'after' | 'mid' }
+// Where the probe's helper throws: never, before its `next`, after it, after the first chunk,
+// or the same Error object on every call (as a cached failed start would).
+type How = { mode: 'pass' | 'before' | 'after' | 'mid' | 'cached' }
+const CACHED = new Error('probe start failed')
 type BashHook = MatchedHook<'tool.call', { readonly tool: 'Bash' }>
 type StepHook = StreamHook<'turn.step'>
 
@@ -87,16 +89,17 @@ type StepHook = StreamHook<'turn.step'>
 function registerProbe(on: On, ctx: Ctx, how: How): void {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     if (!isOn(ctx)) return next(e)
-    try { const r = await probeCall($, e, next, how); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
+    try { const r = await probeCall($, e, beneath(next), how); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
   })
   on('turn.step', {}, async function* ($, e, next) {
     if (!isOn(ctx)) return yield* next(e)
-    try { const r = yield* probeStep($, e, next, how); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
+    try { const r = yield* probeStep($, e, beneath(next), how); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
   })
 }
 
 async function probeCall(_$: EngineInterface, e: Parameters<BashHook>[1], next: Parameters<BashHook>[2], how: How) {
   if (how.mode === 'before') throw new Error('probe broke before next')
+  if (how.mode === 'cached') throw CACHED
   const r = await next({ ...e, command: `${e.command} # probe` })
   if (how.mode === 'after') throw new Error('probe broke after next')
   return r
@@ -196,6 +199,55 @@ test('an inner module failure counts once, against the inner module only', async
   expect(shared.health.rtk).toMatchObject({ on: false, off: 'errors', fails: 3, streak: 3 })
   expect(shared.health.rtk.lastErr).toBe('Error: probe broke mid stream')
   expect(shared.health.bashcap).toEqual({ on: true, fails: 0, streak: 0 })
+})
+
+test('one Error object thrown on three calls turns the module off', async ($, on) => {
+  const p = probe(on, $, 'cached')
+  await p.bash()
+  await p.bash()
+  await p.bash()
+  expect(p.health()).toMatchObject({ on: false, off: 'errors', fails: 3, lastErr: 'Error: probe start failed' })
+})
+
+// Core, an API error or an abort beneath the module: its guard passes the error on uncounted.
+test('errors from beneath next never count against the module', async ($, on) => {
+  mock.store(on)
+  on('ui.status', () => ({ value: undefined }))
+  const ctx: Ctx = { id: 'rtk', caps: {}, shared: createShared(MODULE_META.map((m) => m.id)) }
+  registerProbe(on, ctx, { mode: 'pass' })
+  on('tool.call', { tool: 'Bash' }, () => {
+    throw new Error('core broke')
+  })
+  on('turn.step', async function* () {
+    yield { kind: 'text', index: 0, text: 'a' }
+    throw new Error('stream broke')
+  })
+  // The stubs share the probe's registrar, so each broken call also rejects here.
+  for (let i = 0; i < 3; i++) {
+    expect(await $.tool.call({ tool: 'Bash', command: 'ls' }).then(() => 'ran', String)).toContain('Error')
+    let stepErr = ''
+    try {
+      for await (const _ of $.turn.step({ ...STEP })) void _
+    } catch (err) {
+      stepErr = String(err)
+    }
+    expect(stepErr).toContain('Error')
+  }
+  expect(ctx.shared.health.rtk).toEqual({ on: true, fails: 0, streak: 0 })
+})
+
+test('beneath(next) reads every property of next unchanged', async ($, on) => {
+  const same: Record<string, boolean> = {}
+  on('tool.call', { tool: 'Bash' }, async (_, e, next) => {
+    const b = beneath(next)
+    for (const k of ['called', 'signal', 'origin', 'event', 'to', 'is']) same[k] = Reflect.get(b, k) === Reflect.get(next, k)
+    return b(e)
+  })
+  const seen = bashEngine(on)
+  const r = await $.tool.call({ tool: 'Bash', command: 'ls' })
+  expect(same).toEqual({ called: true, signal: true, origin: true, event: true, to: true, is: true })
+  expect(seen).toEqual(['ls'])
+  expect(r.result).toMatchObject({ stdout: 'run 1' })
 })
 
 // ---- the host ----

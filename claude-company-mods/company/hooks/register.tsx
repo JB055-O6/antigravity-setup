@@ -5,20 +5,28 @@ import { CHARTER } from './charter'
 import { GREP_LINES, READ_LINES, dietPrompt, readNote, recordDiet, shouldCapRead } from './diet'
 import { routeSpawn, type Route } from './router'
 import { governEffort, modelFamily, recordGoverned } from './governor'
-import { applyLimits, boot, note, readPanel, showStatus, type MeterState } from './host'
+import { applyLimits, boot, readPanel, showStatus } from './host'
+import { createShared, envOff, note, noteOf, setOff, type Ctx, type ModuleId } from './core'
+import { MODULE_META } from './modules'
 
 export const register: Register = (on, options) => {
-  // Effort remembered per routed subagent, by the agentId the spawn resolves with.
-  const efforts = new Map<string, Route['effort']>()
   let routedThisSession = 0
   let routedTotal = 0
   let fableWarned = false
-  // Limit meter state; `st.economy` is read synchronously by turn.step.
-  const st: MeterState = { windows: {}, economy: false, routedTotal: 0, dirs: [], crew: 0, version: '', log: [], seq: 0, runs: [], shown: 0, paneShown: false }
-  // Agent tool call id -> subagent id, to mark a run done when its tool call returns.
-  const runByTool = new Map<string, string>()
+  // State every hook and module shares; `st.economy` and `st.efforts` are read synchronously by turn.step.
+  const st = createShared(MODULE_META.map((m) => m.id))
+  const ctx = Object.fromEntries(MODULE_META.map((m) => [m.id, { id: m.id, caps: m.caps, shared: st }])) as Record<ModuleId, Ctx>
 
   on('session.start', async ($, e, next) => {
+    // Read once per session: the modules COMPANY_OFF names start off.
+    try {
+      for (const id of envOff(await $.env.get('COMPANY_OFF'))) {
+        setOff(ctx[id], 'env')
+        noteOf(ctx[id], 'off: env COMPANY_OFF')
+      }
+    } catch {
+      // No variable to read: every module stays on.
+    }
     await boot($, st)
     // The live pane opens by itself on the desktop app; /company opens it anywhere.
     if (e.surface === 'desktop') void $.ui.open({ id: PANE_ID, title: 'Company' }).then((o) => { st.paneShown = o.isPlaced }).catch(() => {})
@@ -107,7 +115,7 @@ export const register: Register = (on, options) => {
             status: (e.background ? 'background' : 'running') as CrewRun['status'],
           },
         ].slice(-8)
-        runByTool.set(e.tool_use_id, result.agentId)
+        st.runByTool.set(e.tool_use_id, result.agentId)
         if (!route && prompt === null) showStatus($, st)
       }
     } catch {
@@ -121,7 +129,7 @@ export const register: Register = (on, options) => {
           if (!route) showStatus($, st)
         }
         if (route) {
-          if (result.agentId) efforts.set(result.agentId, route.effort)
+          if (result.agentId) st.efforts.set(result.agentId, route.effort)
           routedThisSession += 1
           let total = routedThisSession
           try {
@@ -202,7 +210,7 @@ export const register: Register = (on, options) => {
       let rerouted = false
       if (e.agentId) {
         // The router's remembered subagent effort first.
-        const want = efforts.get(e.agentId)
+        const want = st.efforts.get(e.agentId) as Route['effort'] | undefined
         if (want && want !== e.effort) effort = want
         // Fable bills usage credits, not the Pro limits: a subagent's Fable step goes to
         // Opus max (the governor lowers it to xhigh in economy). Never the main loop.
@@ -267,7 +275,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const result = await next(e)
     try {
-      const id = runByTool.get(e.tool_use_id)
+      const id = st.runByTool.get(e.tool_use_id)
       const run = id ? st.runs.find((r) => r.id === id) : undefined
       if (run && run.status === 'running') {
         run.status = result.isError || result.deny !== undefined ? 'failed' : 'done'
@@ -279,4 +287,10 @@ export const register: Register = (on, options) => {
     }
     return result
   })
+
+  // Module hooks nest beneath the hooks above, in MODULE_META order: each port adds its
+  // `register<Name>(on, use('<id>'))` call here. The returned order is checked by a test.
+  const order: ModuleId[] = []
+  const use = (id: ModuleId): Ctx => (order.push(id), ctx[id])
+  return order
 }

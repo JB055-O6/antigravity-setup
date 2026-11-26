@@ -1,30 +1,12 @@
-// Host state shared by the hooks: meter state, the pane atom, the status line and boot.
+// Host side of the shared state: the pane atom, the status line and boot.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
-import type { CrewRun, Panel } from '../types'
 import { EMPTY_PANEL } from './panel'
 import { directiveState, directivesNote } from './directives'
 import { dietTotal } from './diet'
-import { governedTotal, meterLine, nextEconomy, readWindows, type Windows } from './governor'
+import { governedTotal, meterLine, nextEconomy, readWindows } from './governor'
 import { CREW } from './crew'
-
-export type MeterState = {
-  windows: Windows
-  economy: boolean
-  economySince?: number
-  routedTotal: number
-  directives?: string
-  dirs: { name: string; on: boolean }[]
-  crew: number
-  version: string
-  log: Panel['log']
-  seq: number
-  lastGov?: string
-  runs: CrewRun[]
-  // Last log line posted as a chat notice, and whether a surface draws the pane.
-  shown: number
-  paneShown: boolean
-}
+import { note, type Shared } from './core'
 
 const LABEL: Record<string, string> = { start: 'COMPANY', route: 'ROUTER', governor: 'GOVERNOR', meter: 'METER', diet: 'DIET', crew: 'CREW' }
 
@@ -36,13 +18,7 @@ export function readPanel($: EngineInterface) {
   return read($, panel)
 }
 
-// One line in the pane's activity list (last 40 kept).
-export function note(st: MeterState, kind: string, text: string): void {
-  st.seq += 1
-  st.log = [...st.log, { n: st.seq, kind, text }].slice(-40)
-}
-
-export function showStatus($: EngineInterface, st: MeterState): void {
+export function showStatus($: EngineInterface, st: Shared): void {
   try {
     $.ui.status(
       meterLine({
@@ -86,7 +62,7 @@ export function showStatus($: EngineInterface, st: MeterState): void {
 }
 
 // Everything a session needs, run at start and again by /company in a live session.
-export async function boot($: EngineInterface, st: MeterState): Promise<number> {
+export async function boot($: EngineInterface, st: Shared): Promise<number> {
   let crew = 0
   for (const a of CREW) {
     try {
@@ -137,7 +113,7 @@ export async function boot($: EngineInterface, st: MeterState): Promise<number> 
 }
 
 // Apply one reading of the rate-limit windows. Best-effort: never throws.
-export async function applyLimits($: EngineInterface, st: MeterState, limits: unknown): Promise<void> {
+export async function applyLimits($: EngineInterface, st: Shared, limits: unknown): Promise<void> {
   try {
     // A reading without a window keeps the last known value of that window.
     // readWindows checks each field; a non-list throws into the catch below.

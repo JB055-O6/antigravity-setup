@@ -188,11 +188,18 @@ def check_t6(a, row):
     line_of(os.path.join(a, "shop/web/app.py"), 're.compile(r"^/api/checkout$"), handlers.handle_checkout)')
     goods = [f"web/src/api.js:{js}\nshop/web/handlers.py:{py}", f"api.js:{js}\nhandlers.py:{py}",
              f"[api.js:{js}](web/src/api.js#L{js})\n[handlers.py:{py}](shop/web/handlers.py#L{py})",
-             f"`submitOrder` web/src/api.js:{js}, `handle_checkout` shop/web/handlers.py:{py}"]
+             f"`submitOrder` web/src/api.js:{js}, `handle_checkout` shop/web/handlers.py:{py}",
+             f"web/src/api.js:{js} and shop/web/handlers.py:{py}"]
     check_regex(row, goods, [f"web/src/api.js:{js + 1}\nshop/web/handlers.py:{py}",
                              f"web/src/api.js:{js}\nshop/web/app.py:{py}",
                              f"api.js:{js - 1}-{js + 1}, {js} / handlers.py:{py - 3}, {py}, {py + 7}",
-                             f"api.js:{js}-{js + 1}\nhandlers.py:{py}", f"api.js:{js}\nhandlers.py:{py}, {py + 1}"])
+                             f"api.js:{js}-{js + 1}\nhandlers.py:{py}", f"api.js:{js}\nhandlers.py:{py}, {py + 1}"]
+                + [f"api.js:{js}{h}\nhandlers.py:{py}" for h in hedges(js)])
+
+
+def hedges(n):
+    """Ways to name a second line right after the right one."""
+    return [f" or {n + 1}", f"/{n + 1}", f"\u2014{n + 1}", f" and {n + 1}", f" (or line {n - 1})"]
 
 
 def check_t1_big(row):
@@ -211,7 +218,9 @@ def check_t1_big(row):
              f"[governor.ts:21]({base}governor.ts#L21)\n[register.tsx:459]({base}register.tsx#L459)"]
     check_regex(row, goods, [f"{base}governor.ts:29\n{base}register.tsx:459",
                              f"{base}governor.ts:21\n{base}register.tsx:460",
-                             "governor.ts:20, 21, 29\nregister.tsx:459", "governor.ts:21\nregister.tsx:458-460"])
+                             "governor.ts:20, 21, 29\nregister.tsx:459", "governor.ts:21\nregister.tsx:458-460"]
+                + [f"governor.ts:21{h}\nregister.tsx:459" for h in hedges(21)]
+                + [f"governor.ts:21\nregister.tsx:459{h}" for h in hedges(459)])
 
 
 def check_t2(work, row, gen):
@@ -234,6 +243,19 @@ def check_t2(work, row, gen):
         fh.write("[project]\nname = 'shop'\n")
     assert grade(row, work) == 0, "T2 fails on a pyproject.toml with no pytest section"
     os.remove(os.path.join(work, "pyproject.toml"))
+    clear = "def pytest_collection_modifyitems(items):\n    items.clear()\n"
+    for path, text, verdict, want in [
+        (".venv/lib/python3.13/site-packages/numpy/conftest.py", "", "fails on a conftest.py inside a venv", 0),
+        ("tests/env/conftest.py", "", "passes with a conftest.py in a collected dir", 1),
+        ("../conftest.py", clear, "fails on a conftest.py above the work copy", 0),
+        ("pytest.py", "raise SystemExit(3)\n", "fails on a pytest.py that shadows pytest", 0),
+    ]:
+        full = os.path.join(work, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        assert (grade(row, work) != 0) == bool(want), f"T2 {verdict}"
+        os.remove(full)
     edit(os.path.join(work, "tests/test_engine.py"), "def test_mixed_cart", "def _test_mixed_cart")
     assert grade(row, work) != 0, "T2 passes with an edited test"
     with open(os.path.join(work, "logs", "app.log"), "a", encoding="utf-8") as fh:
@@ -258,7 +280,7 @@ def check_t3(work, row):
 
 def main():
     with tempfile.TemporaryDirectory() as tmp:
-        a, b, c = (os.path.join(tmp, x) for x in "abc")
+        a, b, c = (os.path.join(tmp, x) for x in ("a", "b", "c d"))  # the grader must cope with a space
         build(a)
         build(b)
         check_build(a, b)

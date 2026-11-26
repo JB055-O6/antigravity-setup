@@ -10,6 +10,7 @@ Usage, from the work copy root: python3 -I <fixture3>/grading/grade.py hashes|t2
 
 import hashlib
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,8 @@ BASE_TESTS = 38  # tests in the fixture's own suite; test_gen.py checks this num
 HELD_OUT = {"t2": "test_t2_heldout.py", "t3": "test_t3_heldout.py"}
 PYTEST_FILES = ("conftest.py", "pytest.ini", ".pytest.ini")
 PYTEST_SECTIONS = {"pyproject.toml": "[tool.pytest", "setup.cfg": "[tool:pytest]", "tox.ini": "[pytest]"}
+# Never collected, and installed packages ship their own conftest.py (numpy does).
+SKIP_DIRS = {".git", ".venv", "venv", "env", "node_modules", "site-packages", "__pycache__", "graphify-out"}
 
 
 def hashes_ok():
@@ -38,7 +41,8 @@ def hashes_ok():
 
 def config_ok():
     for d, dirs, files in os.walk("."):
-        dirs[:] = [x for x in dirs if x != ".git"]
+        if not (d + "/").startswith("./tests/"):  # pytest collects all of tests/, so skip nothing there
+            dirs[:] = [x for x in dirs if x not in SKIP_DIRS]
         for f in files:
             path = os.path.join(d, f)
             if f in PYTEST_FILES:
@@ -63,9 +67,13 @@ def tests_ok(task):
     want = BASE_TESTS + held + (1 if task == "t3" else 0)
     with tempfile.TemporaryDirectory() as tmp:
         report = os.path.join(tmp, "report.xml")
-        # -c /dev/null: ignore any pytest config the session added.
-        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", os.devnull,
-                            "--rootdir", ".", f"--junitxml={report}", "tests"], capture_output=True, text=True)
+        # -P: a pytest.py in the work copy cannot shadow pytest; pytest adds the work copy to sys.path
+        # itself once loaded (pythonpath), so `import shop` works. -c /dev/null ignores pytest config
+        # files; --confcutdir stops conftest.py files above the work copy.
+        work = os.getcwd()
+        r = subprocess.run([sys.executable, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", os.devnull,
+                            "-o", f"pythonpath={shlex.quote(work)}", "--rootdir", work, "--confcutdir", work,
+                            f"--junitxml={report}", "tests"], capture_output=True, text=True)
         if not os.path.exists(report):
             return fail(f"pytest exit {r.returncode}, no report\n{r.stdout[-1500:]}")
         root = ET.parse(report).getroot()

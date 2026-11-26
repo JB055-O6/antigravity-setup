@@ -24,6 +24,7 @@ and a 5 MB service log. The tasks and their grading rules are in `TASKS.md`.
 
 Checked with Python 3.13.18, git 2.43.0 and pytest 9.2.0
 (`pip install --user pytest`; pytest is not part of the base image).
+`grading/grade.py` needs Python 3.11 or newer: it runs pytest with `-P`.
 
 ## After a change to app/ or the log generator
 

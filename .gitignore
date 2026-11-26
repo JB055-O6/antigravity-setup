@@ -2,3 +2,4 @@
 credentials.json
 token.json
 .env
+claude-company-mods/company/.claude-plugin/types/

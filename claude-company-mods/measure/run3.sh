@@ -1,13 +1,14 @@
 #!/bin/bash
-# usage: [DRY=1] run3.sh <setup A-F> <task T1..T6|T1-big> <rep> <lane>
+# usage: [DRY=1] run3.sh <setup A0|A-F> <task T1..T6|T1-big> <rep> <lane>
 # One benchmark v3 run (spec section 10): a fresh work copy at $SCRATCH/<lane>/<setup>-<task>-<rep>,
 # one `claude -p` session in it, then grading into $R3/<setup>-<task>-<rep>.{jsonl,err,grade}.
 # The work copy is outside the repo, so no repo CLAUDE.md loads and the session never sees
 # fixture3/grading or TASKS.md; grading copies the held-out tests in only after the session ends.
 # Env: SCRATCH, R3, RTK_MODE (D and F; default full, spec 10 re-runs with light), TIMEOUT (s), BUDGET ($).
-# DRY=1 prints the session command and changes nothing.
+# D/F need rtk 1.2.1 and E/F a graph build; when that check fails, no session runs and the
+# .grade line (rtk/graph <rc>) makes score3.py call the run INVALID. DRY=1 prints the command, changes nothing.
 set -u
-[ $# -eq 4 ] || { sed -n '2,8p' "$0"; exit 2; }
+[ $# -eq 4 ] || { sed -n '2,9p' "$0"; exit 2; }
 SETUP=$1 TASK=$2 REP=$3 LANE=$4
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(git -C "$HERE" rev-parse --show-toplevel) || exit 2
@@ -17,7 +18,7 @@ R3=${R3:-$SCRATCH/r3}
 NAME=$SETUP-$TASK-$REP
 W=$SCRATCH/$LANE/$NAME
 die() { echo "run3: $*" >&2; exit 2; }
-[[ $SETUP == [A-F] ]] || die "setup must be A-F"
+[[ $SETUP =~ ^(A0|[A-F])$ ]] || die "setup must be A0 or A-F"
 [[ $TASK =~ ^(T[1-6]|T1-big)$ ]] || die "task must be T1..T6 or T1-big"
 [[ $REP =~ ^[0-9a-z]+$ && $LANE =~ ^[0-9]+$ ]] || die "rep must be [0-9a-z]+, lane a number"
 [[ $TASK != T1-big || $SETUP == [CEF] ]] || die "T1-big runs only for C, E and F (spec 15)"
@@ -35,8 +36,15 @@ OFF='{"enabledPlugins":{"company@synced":false}}'
 R=$REPO/claude-company-mods/company
 B=$SCRATCH/plugins/785718d/claude-company-mods/company
 RTK_MODE=${RTK_MODE:-full}
+STOCK=() # A0 only
 case $SETUP in # plugin, and the module switches the host reads once at session start (Task 6)
-  A) PLUG= ENVS=() ;;                                            # stock: company off
+  A0) PLUG= ENVS=() STOCK=(--safe-mode) # pure stock Claude: every installed plugin off (listed now, so
+      # new ones count too; this also drops plugin MCP servers), and --safe-mode drops user skills,
+      # hooks, CLAUDE.md and MCP. Builtin plugins ship with Claude Code and stay. score3 checks init.
+      OFF=$(claude plugin list --json | python3 -I -c 'import json, sys
+print(json.dumps({"enabledPlugins": {p["id"]: False for p in json.load(sys.stdin) if not p["id"].endswith("@builtin")}}))') \
+        || die "cannot list the installed plugins" ;;
+  A) PLUG= ENVS=() ;;                                            # client setup minus company
   B) PLUG=$B ENVS=() ;;                                          # 0.10.2 (git 785718d); has no switches
   C) PLUG=$R ENVS=(COMPANY_OFF=rtk,graph) ;;                     # 0.11, rtk and graph off
   D) PLUG=$R ENVS=(COMPANY_OFF=graph COMPANY_RTK_MODE=$RTK_MODE) ;; # 0.11 + rtk
@@ -52,7 +60,7 @@ BASE=(python3 python pytest "git log" "git diff" "git status" "git show" "git bl
 ALLOW=(Read Grep Glob Edit Write Agent)
 for c in "${BASE[@]}"; do ALLOW+=("Bash($c:*)"); done
 case $SETUP in
-  A|B|C) ;; # A stock, B 0.10.2, C 0.11 with rtk and graph off: BASE only, so no rtk or graphify form
+  A0|A|B|C) ;; # A0 pure stock, A client minus company, B 0.10.2, C 0.11 with rtk and graph off: BASE only
   D|F) # rtk: the rtk form of each BASE form (a rewrite must pass with no prompt, spec 7.1), rtk read
        # (rtk's form of cat, head and tail), and `rtk bypass <BASE form>` (named in the savers block)
     for c in "${BASE[@]}" read; do ALLOW+=("Bash(rtk $c:*)"); done
@@ -61,11 +69,12 @@ case $SETUP in
 esac
 PD=(); [ -n "$PLUG" ] && PD=(--plugin-dir "$PLUG")
 SESSION=(env -u COMPANY_OFF -u COMPANY_RTK_MODE "${ENVS[@]}" timeout "${TIMEOUT:-1800}"
-  claude -p "$P" --model opus --effort medium --settings "$OFF" "${PD[@]}"
+  claude -p "$P" --model opus --effort medium --settings "$OFF" "${PD[@]}" "${STOCK[@]}"
   --tools "Bash,Read,Grep,Glob,Edit,Write,Agent" --allowedTools "$(IFS=,; echo "${ALLOW[*]}")"
   --max-budget-usd "${BUDGET:-5}" --output-format stream-json --verbose)
 if [ -n "${DRY:-}" ]; then
-  printf 'cwd %s -> %s\nplugin %s\nenv %s\nallow %s\n' "$W" "$R3/$NAME.jsonl" "${PLUG:-none}" "${ENVS[*]}" "${ALLOW[*]}"
+  printf 'cwd %s -> %s\nplugin %s\nsettings %s %s\nenv %s\nallow %s\n' "$W" "$R3/$NAME.jsonl" "${PLUG:-none}" "$OFF" \
+    "${STOCK[*]}" "${ENVS[*]}" "${ALLOW[*]}"
   printf '%q ' "${SESSION[@]}"; echo; exit 0
 fi
 
@@ -85,22 +94,30 @@ case $TASK in # recipes from fixture3/TASKS.md; never a reused copy
   T3) python3 -I "$FIX/gen.py" "$W" --fixed >/dev/null ;;
   *) python3 -I "$FIX/gen.py" "$W" >/dev/null ;;
 esac || die "$NAME: work copy failed"
+PREP=() # rtk and graph checks, for the .grade file
+if [[ $SETUP == [DF] ]]; then rtk --version 2>/dev/null | grep -qx 'rtk 1\.2\.1'; PREP+=("rtk $?"); fi
 if [[ $SETUP == [EF] ]]; then
   # The graph hint goes in only when graph.json exists at session start (spec 7.2), and a fresh copy
   # has none, so E and F get the graph a repo with the graph on already has. No LLM, no tokens.
   (cd "$W" && env GRAPHIFY_BACKEND=none ANTHROPIC_API_KEY= OPENAI_API_KEY= GEMINI_API_KEY= GOOGLE_API_KEY= \
     AZURE_OPENAI_API_KEY= DEEPSEEK_API_KEY= MOONSHOT_API_KEY= OLLAMA_API_KEY= GRAPHIFY_API_KEY= \
-    timeout 600 graphify update . >/dev/null 2>&1) || echo "run3: $NAME: graph build failed" >&2
+    timeout 600 graphify update . >/dev/null 2>&1 && [ -s graphify-out/graph.json ])
+  PREP+=("graph $?")
   mkdir -p "$W/.git/info" && echo 'graphify-out/' >> "$W/.git/info/exclude" # keeps git status (T5) clean
 fi
 
-case $SETUP in A) code=none ;; B) code=785718d ;; # the code under test, taken before the session loads it
+case $SETUP in A|A0) code=none ;; B) code=785718d ;; # the code under test, taken before the session loads it
   *) code=$(git -C "$REPO" rev-parse --short HEAD)$([ -n "$(git -C "$REPO" status --porcelain -- "$R")" ] && echo +dirty) ;;
 esac
+HEAD=("plugin ${PLUG:-none}" "code $code" "env ${ENVS[*]}" "${PREP[@]}")
+if [[ " ${PREP[*]} " =~ \ (rtk|graph)\ [1-9] ]]; then # D/F or E/F would run as C: spend nothing
+  : > "$R3/$NAME.jsonl"; printf '%s\n' "${HEAD[@]}" "exit skipped" > "$R3/$NAME.grade"
+  echo "$NAME lane $LANE skipped: ${PREP[*]}" >&2; exit 1
+fi
 (cd "$W" && "${SESSION[@]}" < /dev/null > "$R3/$NAME.jsonl" 2> "$R3/$NAME.err")
 rc=$?
-{ # read by score3.py: plugin, hashes, cmd; the rest is for the record
-  echo "plugin ${PLUG:-none}"; echo "code $code"; echo "env ${ENVS[*]}"; echo "exit $rc"
+{ # read by score3.py: plugin, exit, rtk, graph, hashes, cmd; the rest is for the record
+  printf '%s\n' "${HEAD[@]}" "exit $rc"
   if [ "$TASK" != T1-big ]; then out=$(cd "$W" && python3 -I "$FIX/grading/grade.py" hashes 2>&1); echo "hashes $?"; echo "$out" | sed 's/^/# /'; fi
   if [ -n "$CMD" ]; then out=$(cd "$W" && FIXTURE=$FIX bash -c "$CMD" 2>&1); echo "cmd $?"; echo "$out" | sed 's/^/# /'; fi
 } > "$R3/$NAME.grade"

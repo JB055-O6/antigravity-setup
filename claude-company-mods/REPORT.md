@@ -6,7 +6,7 @@ Date: 2026-11-19. Mod: `company` 0.9.1.
 
 - Mod built. Mod tested. Mod packaged.
 - 22 live runs. All 22 answers right, with mod and without.
-- Mod cut total cost 17% in round 2. Subagent work: 42-54% cheaper.
+- **Correction 2026-11-26:** "−17% total, −42-54% subagent work" was WRONG. First stock run had cold cache. Fair numbers: mod cost about 2% MORE ($0.824 vs $0.809). No proven saving yet. See "Mistakes" #8 and `company/grill-report-2026-11-26.md` section 0.
 - All tests done. Fable runs dropped (cost credits).
 
 ## What we want
@@ -102,7 +102,7 @@ Live test, round 1. Main model Opus medium. One run each. Same four plugins on i
 
 What it mean:
 
-- Router = big win. Subagent go Haiku, cost $0.001 not Opus.
+- Router: subagent go Haiku, cost $0.001 not Opus. But stock t1 here ran with cold cache, so −54% is not fair (corrected 2026-11-26).
 - Mod add about 3,600 input tokens per 2-request task, so about 1,800 per request (charter + crew). Cost about $0.003 on small tasks with no subagent.
 - Read cap and Grep cap not fire in these tasks. Opus already read small.
 
@@ -116,10 +116,11 @@ Live test, round 2. Mod 0.9.x (same code as 0.9.1). Two runs each. Plus bug-fix 
 | Fix bug in code | $0.109 | $0.113 | +4% | 4 of 4 yes |
 | **All 16 runs** | **$0.989** | **$0.824** | **−17%** | **16 of 16** |
 
-What it mean:
+What it mean (corrected 2026-11-26):
 
-- Same pattern two rounds. Router save big. Fixed overhead cost 3-4% on small solo tasks.
-- Work with subagents: mod win. Tiny solo task: mod lose a little.
+- Table above is WRONG for t1. Run `t1-base-1` ran first with cold cache (cache_create 39,688, $0.2949). Warm stock run `t1-base-2`: $0.1149. Mod mean $0.1179. So t1: no saving.
+- Fair total: stock $0.809, mod $0.824. Mod about 2% dearer. Round 1 t1 same fault.
+- Router do send subagent to Haiku. But mod add about 3.3k input tokens per task, and that eat the saving.
 - Quality same: no wrong answer anywhere.
 
 ## Not proven (honest)
@@ -129,7 +130,7 @@ What it mean:
 3. **Sync to all devices.** Proven: account plugins load in cloud sessions (this one did). Not proven: desktop app, terminal on your PC.
 4. **Fable billing change.** You said. Me not check.
 5. **Real limit cost per model.** Nobody publish it. Me use API price as stand-in.
-6. **Big saving number.** 22 runs, small tasks. −17% hold for this mix only. Real mix with more subagents save more; mix with none lose 3-4%.
+6. **Any saving.** Corrected: fair data show no saving yet (mod about +2%). New benchmark must prove it.
 7. **Panel in desktop app.** Test draw it. Not seen on real screen.
 
 ## Not done
@@ -147,6 +148,7 @@ All by manager (me). All fixed.
 5. Old test expected Fable kept after the no-Fable change. Test fixed.
 6. Directives check said caveman, headroom missing. They were on (account-synced plugins not in settings list). Fixed: also read loaded plugins. Test added.
 7. Package 0.9.0 said version 0.6.0 inside (old manifest copied over). Code was right. Fixed: 0.9.1, version checked inside zip.
+8. Saving claim wrong (found 2026-11-26 by audit). Benchmark always ran stock first, so stock paid cold-cache cost. Me not check cache-create vs cache-read before claim. Fix: claim pulled; new benchmark has warm-up run, rotated order, n≥4, failed runs not counted as $0, cache-normalised cost.
 
 ## Files
 

@@ -1,13 +1,14 @@
 import type { Register } from 'claude-code'
 import type { CrewRun } from '../types'
 import { PANE_ID, PanelView, panelText } from './panel'
-import { CHARTER } from './charter'
-import { GREP_LINES, READ_LINES, dietPrompt, readNote, recordDiet, shouldCapRead } from './diet'
 import { routeSpawn, type Route } from './router'
-import { governEffort, modelFamily, recordGoverned } from './governor'
-import { applyLimits, boot, readPanel, showStatus } from './host'
-import { createShared, envOff, note, noteOf, resetHealth, setOff, type Ctx, type ModuleId } from './core'
+import { governEffort, modelFamily } from './governor'
+import { boot, readPanel, showStatus } from './host'
+import { acted, createShared, envOff, note, noteOf, resetHealth, setOff, type Ctx, type ModuleId } from './core'
 import { MODULE_META } from './modules'
+import { registerCharter } from './modules/charter'
+import { registerDiet } from './modules/diet'
+import { registerMeter } from './modules/meter'
 import { countRoute, finalFlush, newSession, ready, save } from './persist'
 
 // The module id each register<Name> call below takes, in call order; a test compares it with MODULE_META.
@@ -85,24 +86,11 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('session.measure', async ($, e, next) => {
-    await ready($, st)
-    // Pushed figures: refresh from them. Never blocks.
-    try {
-      await applyLimits($, st, e.rateLimits)
-    } catch {
-      // Keep the previous values.
-    }
-    // The meter goes to $.store, so economy survives a reload.
-    void save($, st)
-    return next(e)
-  })
-
   on('agent.spawn', async ($, e, next) => {
     await ready($, st)
     // Not a guard: if anything here throws, the spawn goes ahead unchanged.
+    // The diet module beneath adds the report block.
     let route: Route | null = null
-    let prompt: string | null = null
     try {
       const skip = e.isTeammate || e.resume || e.workflow
       route = skip
@@ -114,16 +102,10 @@ export const register: Register = (on, options) => {
             prompt: e.prompt,
             providerIsEngine: e.provider.plugin === 'engine',
           })
-      // The compact-report block: not for forks, teammates, resumes or workflow agents.
-      prompt = skip || e.fork ? null : dietPrompt(e.prompt)
     } catch {
       return next(e)
     }
-    const result = await next({
-      ...e,
-      ...(route ? { model: route.model } : {}),
-      ...(prompt !== null ? { prompt } : {}),
-    })
+    const result = await next(route ? { ...e, model: route.model } : e)
 
     try {
       if (!result.deny && result.agentId) {
@@ -141,71 +123,24 @@ export const register: Register = (on, options) => {
           },
         ].slice(-8)
         st.runByTool.set(e.tool_use_id, result.agentId)
-        if (!route && prompt === null) showStatus($, st)
       }
     } catch {
       // Bookkeeping must never disturb the spawn.
     }
     try {
       if (!result.deny) {
-        if (prompt !== null) {
-          recordDiet('report')
-          note(st, 'diet', 'subagent told to report in 25 lines or less')
-          if (!route) showStatus($, st)
-        }
         if (route) {
           if (result.agentId) st.efforts.set(result.agentId, route.effort)
           // In memory, so parallel spawns each count; the store write never holds up the spawn.
           countRoute(st, route.model)
           void save($, st)
           note(st, 'route', `${e.subagentType ?? 'subagent'} → ${route.model} ${route.effort} (${route.reason})`)
-          showStatus($, st)
         }
-      }
-    } catch {
-      // Bookkeeping must never disturb the spawn.
-    }
-    return result
-  })
-
-  on('tool.call', { tool: 'Read' }, async ($, e, next) => {
-    await ready($, st)
-    // Not a guard: never denies; on any error the call goes down untouched.
-    let size: number | undefined
-    try {
-      if (!e.agentId && e.offset == null && e.limit == null && e.pages == null) {
-        const stat = await $.fs.stat(e.file_path)
-        if (stat.kind === 'file' && shouldCapRead(e.file_path, stat.size)) size = stat.size
-      }
-    } catch {
-      size = undefined
-    }
-    if (size === undefined) return next(e)
-    const result = await next({ ...e, limit: READ_LINES })
-    try {
-      if (result.deny !== undefined || result.isError) return result
-      recordDiet('read')
-      note(st, 'diet', `big file read capped at ${READ_LINES} lines (${Math.round(size / 1024)} KB)`)
-      showStatus($, st)
-      return { ...result, context: [...(result.context ?? []), readNote(size)] }
-    } catch {
-      return result
-    }
-  })
-
-  on('tool.call', { tool: 'Grep' }, async ($, e, next) => {
-    await ready($, st)
-    // Not a guard: never denies.
-    if (e.agentId || e.output_mode !== 'content' || e.head_limit != null) return next(e)
-    const result = await next({ ...e, head_limit: GREP_LINES })
-    try {
-      if (result.deny === undefined && !result.isError) {
-        recordDiet('grep')
-        note(st, 'diet', `search output capped at ${GREP_LINES} lines`)
+        // One status per spawn, after the route and the diet below have counted.
         showStatus($, st)
       }
     } catch {
-      // Counting is best-effort.
+      // Bookkeeping must never disturb the spawn.
     }
     return result
   })
@@ -229,7 +164,7 @@ export const register: Register = (on, options) => {
           model = 'opus'
           effort = 'max'
           rerouted = true
-          recordGoverned('subagent fable -> opus max (no credits)')
+          acted(ctx.governor)
         }
       } else if (modelFamily(model) === 'fable' && !fableWarned) {
         // The main loop's model is never changed (prompt cache); tell the person once.
@@ -241,8 +176,10 @@ export const register: Register = (on, options) => {
       const g = governEffort(model, effort, st.economy)
       if (g.changed) {
         effort = g.effort as typeof e.effort
-        recordGoverned(g.reason)
+        acted(ctx.governor)
       }
+      // The governor's count is in the ledger; the write never holds up the step.
+      if (rerouted || g.changed) void save($, st)
       if (rerouted) out = { ...e, model, effort }
       else if (effort !== e.effort) out = { ...e, effort }
       // Log a fix once per kind, not on every step.
@@ -261,22 +198,6 @@ export const register: Register = (on, options) => {
       out = e
     }
     return yield* next(out)
-  })
-
-  on('prompt.compose', async ($, e, next) => {
-    await ready($, st)
-    const result = await next(e)
-    try {
-      return {
-        sections: [
-          ...result.sections,
-          { id: 'company:charter', text: CHARTER, scope: 'session' as const },
-        ],
-      }
-    } catch {
-      // Not a guard: never block the prompt over the charter.
-      return result
-    }
   })
 
   on('ui.render', { component: 'Pane', requestId: 'company' }, async ($, e) => {
@@ -307,4 +228,7 @@ export const register: Register = (on, options) => {
   // `register<Name>(on, use('<id>'))` call here.
   MODULE_CALLS.length = 0
   const use = (id: ModuleId): Ctx => (MODULE_CALLS.push(id), ctx[id])
+  registerCharter(on, use('charter'))
+  registerMeter(on, use('meter'))
+  registerDiet(on, use('diet'))
 }

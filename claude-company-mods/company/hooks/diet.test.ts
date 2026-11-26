@@ -95,7 +95,7 @@ test('a main-loop Read of a 300 KB text file gets limit 600 and the note', async
   expect(statuses.at(-1)).toContain(' · 1 diet')
 })
 
-test('Reads that must pass untouched', async ($, on) => {
+test('Reads that must pass untouched, but a subagent Read is capped too', async ($, on) => {
   quiet(on)
   const reached = files(on, { '/a.log': BIG, '/b.pdf': BIG, '/s.txt': 1000 })
   await $.tool.call({ tool: 'Read', file_path: '/a.log', limit: 50 })
@@ -103,7 +103,8 @@ test('Reads that must pass untouched', async ($, on) => {
   await $.tool.call({ tool: 'Read', file_path: '/a.log', agentId: 'a9' })
   await $.tool.call({ tool: 'Read', file_path: '/b.pdf' })
   await $.tool.call({ tool: 'Read', file_path: '/s.txt' })
-  expect(reached.map(r => r.limit)).toEqual([50, undefined, undefined, undefined, undefined])
+  // Spec F4: a subagent Read (agentId a9) is capped like the main loop's.
+  expect(reached.map(r => r.limit)).toEqual([50, undefined, 600, undefined, undefined])
   expect(reached[1]!.offset).toBe(10)
 })
 
@@ -116,7 +117,7 @@ test('a stat failure passes the Read untouched', async ($, on) => {
   expect(r.context).toBeUndefined()
 })
 
-test('main-loop Grep content without head_limit gets 200; the rest is untouched', async ($, on) => {
+test('Grep content without head_limit gets 200, in a subagent too; the rest is untouched', async ($, on) => {
   const statuses = quiet(on)
   const reached: Array<Record<string, unknown>> = []
   on('tool.call', { tool: 'Grep' }, (_, e) => {
@@ -128,8 +129,9 @@ test('main-loop Grep content without head_limit gets 200; the rest is untouched'
   await $.tool.call({ tool: 'Grep', pattern: 'x', output_mode: 'files_with_matches' })
   await $.tool.call({ tool: 'Grep', pattern: 'x' })
   await $.tool.call({ tool: 'Grep', pattern: 'x', output_mode: 'content', agentId: 'a9' })
-  expect(reached.map(r => r.head_limit)).toEqual([200, 5, undefined, undefined, undefined])
-  expect(statuses.at(-1)).toContain(' · 1 diet')
+  // Spec F4: a subagent Grep (agentId a9) is capped like the main loop's.
+  expect(reached.map(r => r.head_limit)).toEqual([200, 5, undefined, undefined, 200])
+  expect(statuses.at(-1)).toContain(' · 2 diet')
 })
 
 test('the status line shows the diet count', async ($, on) => {

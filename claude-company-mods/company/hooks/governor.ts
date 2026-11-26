@@ -1,5 +1,4 @@
-// The effort governor and limit meter's pure logic: no `$`, no I/O.
-// The only state is the module counter of governed steps per rule.
+// The effort governor and limit meter's pure logic: no `$`, no I/O, no state (counts are in the ledger).
 
 export type Effort = string | number | undefined
 export type Governed = { effort: Effort; changed: boolean; reason: string }
@@ -33,23 +32,6 @@ export function governEffort(model: string, effort: Effort, economy: boolean): G
     return to('xhigh', 'economy: max -> xhigh')
   }
   return keep
-}
-
-// Module counter of governed steps per rule (no state write per step).
-const counts = new Map<string, number>()
-export function recordGoverned(reason: string): void {
-  if (reason) counts.set(reason, (counts.get(reason) ?? 0) + 1)
-}
-export function governedTotal(): number {
-  let n = 0
-  for (const v of counts.values()) n += v
-  return n
-}
-export function governedByRule(): Record<string, number> {
-  return Object.fromEntries(counts)
-}
-export function resetGoverned(): void {
-  counts.clear()
 }
 
 export type Windows = { fiveHour?: number; week?: number }

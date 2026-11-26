@@ -3,11 +3,11 @@
 import type { ModuleMeta } from '../core'
 
 export const MODULE_META: readonly ModuleMeta[] = [
-  { id: 'charter', title: 'Charter', what: 'Puts the client charter into the system prompt.', caps: {} },
+  { id: 'charter', title: 'Charter', what: 'Puts the client charter into the system prompt.', caps: { section: 4800 } },
   { id: 'meter', title: 'Meter', what: 'Reads the five-hour and weekly limits and starts economy mode near them.', caps: {} },
   { id: 'router', title: 'Router', what: 'Sends each subagent to the cheapest model that fits its task.', caps: {} },
   { id: 'governor', title: 'Governor', what: 'Lowers wasteful effort on each model request.', caps: {} },
-  { id: 'diet', title: 'Diet', what: 'Caps big file reads and search output, and tells subagents to report in short form.', caps: {} },
+  { id: 'diet', title: 'Diet', what: 'Caps big file reads and search output, and tells subagents to report in short form.', caps: { subagentPrompt: 2000 } },
   { id: 'bashcap', title: 'Bash cap', what: 'Cuts huge Bash output and keeps its head, its tail and its error lines.', caps: {} },
   { id: 'rtk', title: 'RTK', what: 'Changes Bash commands to their RTK form, which prints less.', caps: {} },
   { id: 'graph', title: 'Graph', what: 'Builds and updates the code graph and adds one hint line.', caps: {} },

@@ -3,8 +3,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import { EMPTY_PANEL } from './panel'
 import { directiveState, directivesNote } from './directives'
-import { dietTotal } from './diet'
-import { governedTotal, meterLine, nextEconomy, readWindows } from './governor'
+import { meterLine, nextEconomy, readWindows } from './governor'
 import { CREW } from './crew'
 import { note, type Shared } from './core'
 
@@ -42,8 +41,8 @@ export function showStatus($: EngineInterface, st: Shared): void {
         economy: st.economy,
         windows: st.windows,
         routed: st.routedTotal,
-        governed: governedTotal(),
-        diet: dietTotal(),
+        governed: st.ledger.governor.acted,
+        diet: st.ledger.diet.acted,
       }) + (st.directives ? ` · ${st.directives}` : ''),
     )
   } catch {
@@ -60,8 +59,8 @@ export function showStatus($: EngineInterface, st: Shared): void {
     ...(st.windows.week !== undefined ? { week: st.windows.week } : {}),
     economy: st.economy,
     routed: st.routedTotal,
-    governed: governedTotal(),
-    diet: dietTotal(),
+    governed: st.ledger.governor.acted,
+    diet: st.ledger.diet.acted,
     log: st.log,
     runs: st.runs,
   })).catch(() => {})
@@ -79,6 +78,7 @@ export function showStatus($: EngineInterface, st: Shared): void {
 }
 
 // Everything a session needs, run at start and again by /company in a live session.
+// The limits are the meter module's: it reads them at session.start.
 export async function boot($: EngineInterface, st: Shared): Promise<number> {
   let crew = 0
   for (const a of CREW) {
@@ -121,11 +121,7 @@ export async function boot($: EngineInterface, st: Shared): Promise<number> {
     // The version is only shown.
   }
   note(st, 'start', `company ${st.version} on: charter, router, governor, meter, diet, crew ${crew}/${CREW.length}, ${st.directives}`)
-  try {
-    await applyLimits($, st, (await $.session.usage()).rateLimits)
-  } catch {
-    showStatus($, st)
-  }
+  showStatus($, st)
   return crew
 }
 

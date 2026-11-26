@@ -1,4 +1,4 @@
-// The context diet's pure logic: no `$`, no I/O. The only state is a module counter.
+// The context diet's pure logic: no `$`, no I/O, no state (its counts are in the ledger).
 
 export const DIET_MARKER = '[company-diet]'
 
@@ -9,10 +9,10 @@ export const READ_BYTES = 256 * 1024
 export const READ_LINES = 600
 export const GREP_LINES = 200
 
-// The prompt with the block appended once, or null when it already carries the marker.
-export function dietPrompt(prompt: unknown): string | null {
+// The prompt with the block (DIET_BLOCK, capped) appended once, or null when it already carries the marker.
+export function dietPrompt(prompt: unknown, block: string): string | null {
   if (typeof prompt !== 'string' || prompt.includes(DIET_MARKER)) return null
-  return `${prompt}\n\n${DIET_BLOCK}`
+  return `${prompt}\n\n${block}`
 }
 
 const NOT_TEXT = /\.(pdf|ipynb|png|jpe?g|gif|webp|bmp|svg|ico|tiff?|heic|heif|avif)$/i
@@ -26,24 +26,4 @@ export function shouldCapRead(path: unknown, size: unknown): boolean {
 
 export function readNote(size: number): string {
   return `[company-diet] This file is ${Math.round(size / 1024)} KB; only its first ${READ_LINES} lines were read to protect the context. Read further with offset/limit, or delegate full reading or searching of it to the scout subagent.`
-}
-
-let reports = 0
-let reads = 0
-let greps = 0
-export function recordDiet(kind: 'report' | 'read' | 'grep'): void {
-  if (kind === 'report') reports += 1
-  else if (kind === 'read') reads += 1
-  else greps += 1
-}
-export function dietTotal(): number {
-  return reports + reads + greps
-}
-export function dietByKind(): { reports: number; reads: number; greps: number } {
-  return { reports, reads, greps }
-}
-export function resetDiet(): void {
-  reports = 0
-  reads = 0
-  greps = 0
 }

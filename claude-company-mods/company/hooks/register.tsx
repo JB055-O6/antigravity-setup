@@ -1,248 +1,11 @@
-import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
-import type { CrewRun, Panel } from '../types'
-import { EMPTY_PANEL, PANE_ID, PanelView, panelText } from './panel'
+import type { Register } from 'claude-code'
+import type { CrewRun } from '../types'
+import { PANE_ID, PanelView, panelText } from './panel'
 import { CHARTER } from './charter'
-import { directiveState, directivesNote } from './directives'
-import { GREP_LINES, READ_LINES, dietPrompt, dietTotal, readNote, recordDiet, shouldCapRead } from './diet'
+import { GREP_LINES, READ_LINES, dietPrompt, readNote, recordDiet, shouldCapRead } from './diet'
 import { routeSpawn, type Route } from './router'
-import {
-  governEffort,
-  meterLine,
-  modelFamily,
-  nextEconomy,
-  readWindows,
-  recordGoverned,
-  governedTotal,
-  type Windows,
-} from './governor'
-
-const COMMON =
-  'Work only on the task given. Verify your result before reporting (run the tests or the check that proves it). Report in at most 15 lines: what you did, the proof, and anything unresolved. Never paste large raw output; summarise it.'
-
-const CREW = [
-  {
-    name: 'scout',
-    role: 'find, read, look up',
-    model: 'haiku',
-    effort: 'medium',
-    tools: ['Read', 'Glob', 'Grep', 'Bash', 'WebFetch', 'WebSearch'],
-    description:
-      'Fast, cheap lookups: find files, search code, read and summarise files, extract facts, look things up on the web. Read-only work.',
-    prompt: `You are the scout: a fast lookup agent. ${COMMON} Never change files.`,
-  },
-  {
-    name: 'builder',
-    role: 'write code, fix bugs, tests',
-    model: 'sonnet',
-    effort: 'medium',
-    tools: undefined,
-    description:
-      'Multi-step coding, debugging, refactors, tests, documents and fact-complete summaries.',
-    prompt: `You are the builder: you do multi-step coding, debugging, refactors, tests and documents. ${COMMON}`,
-  },
-  {
-    name: 'reviewer',
-    role: 'review code and security',
-    model: 'opus',
-    effort: 'max',
-    tools: ['Read', 'Glob', 'Grep', 'Bash'],
-    description:
-      'Code and security review of a change; finds bugs before they ship.',
-    prompt: `You are the reviewer: you review a change for bugs and security problems before it ships. ${COMMON}`,
-  },
-  {
-    name: 'architect',
-    role: 'design, hard problems',
-    model: 'opus',
-    effort: 'xhigh',
-    tools: undefined,
-    description:
-      'Architecture, design decisions, whole-program builds and hard reasoning, or work a builder failed twice.',
-    prompt: `You are the architect: you make design decisions, build whole programs and solve hard problems. ${COMMON}`,
-  },
-  {
-    name: 'sage',
-    role: 'last resort, hardest problems',
-    model: 'opus',
-    effort: 'max',
-    tools: undefined,
-    description:
-      'Last resort: science, long ambiguous research, costly factual questions, or problems architect could not solve.',
-    prompt: `You are the sage, the last resort: you take on science, long ambiguous research and problems the others could not solve. ${COMMON}`,
-  },
-] as const
-
-type MeterState = {
-  windows: Windows
-  economy: boolean
-  economySince?: number
-  routedTotal: number
-  directives?: string
-  dirs: { name: string; on: boolean }[]
-  crew: number
-  version: string
-  log: Panel['log']
-  seq: number
-  lastGov?: string
-  runs: CrewRun[]
-  // Last log line posted as a chat notice, and whether a surface draws the pane.
-  shown: number
-  paneShown: boolean
-}
-
-const LABEL: Record<string, string> = { start: 'COMPANY', route: 'ROUTER', governor: 'GOVERNOR', meter: 'METER', diet: 'DIET', crew: 'CREW' }
-
-// Change the tag when Panel's fields change: it declines what an older version stored.
-const panel = atom({ plugin: 'company', key: 'panel' } as const, EMPTY_PANEL, { shape: 'panel-2' })
-
-// One line in the pane's activity list (last 12 kept).
-function note(st: MeterState, kind: string, text: string) {
-  st.seq += 1
-  st.log = [...st.log, { n: st.seq, kind, text }].slice(-40)
-}
-
-function showStatus($: EngineInterface, st: MeterState) {
-  try {
-    $.ui.status(
-      meterLine({
-        economy: st.economy,
-        windows: st.windows,
-        routed: st.routedTotal,
-        governed: governedTotal(),
-        diet: dietTotal(),
-      }) + (st.directives ? ` · ${st.directives}` : ''),
-    )
-  } catch {
-    // The line is best-effort.
-  }
-  // The pane redraws from this snapshot.
-  void update($, panel, () => ({
-    version: st.version,
-    crew: st.crew,
-    crewTotal: CREW.length,
-    roster: CREW.map((a) => ({ name: a.name, model: a.model, effort: a.effort, does: a.role })),
-    directives: st.dirs,
-    ...(st.windows.fiveHour !== undefined ? { fiveHour: st.windows.fiveHour } : {}),
-    ...(st.windows.week !== undefined ? { week: st.windows.week } : {}),
-    economy: st.economy,
-    routed: st.routedTotal,
-    governed: governedTotal(),
-    diet: dietTotal(),
-    log: st.log,
-    runs: st.runs,
-  })).catch(() => {})
-  // No pane on screen (a cloud session seen from an app): post each new action as a chat
-  // notice. The model never reads notices, so they cost no tokens.
-  const fresh = st.log.filter((l) => l.n > st.shown)
-  st.shown = st.seq
-  if (!st.paneShown) {
-    for (const l of fresh) {
-      void $.session
-        .append({ message: { type: 'system', content: [{ type: 'text', text: `company · ${LABEL[l.kind] ?? l.kind.toUpperCase()} · ${l.text}` }] } })
-        .catch(() => {})
-    }
-  }
-}
-
-// Everything a session needs, run at start and again by /company in a live session.
-async function boot($: EngineInterface, st: MeterState): Promise<number> {
-  let crew = 0
-  for (const a of CREW) {
-    try {
-      await $.agent.register({
-        name: a.name,
-        description: a.description,
-        prompt: a.prompt,
-        model: a.model,
-        effort: a.effort,
-        ...(a.tools ? { tools: a.tools } : {}),
-      })
-      crew++
-    } catch {
-      // One agent failing to register must not stop the others or the session.
-    }
-  }
-  st.crew = crew
-  let enabled: unknown
-  let loaded: string[] = []
-  try {
-    enabled = await $.settings.read({ key: 'enabledPlugins' })
-  } catch {
-    // Unknown: the command list below may still tell.
-  }
-  try {
-    loaded = (await $.command.list()).map((c) => c.plugin ?? (c.name.includes(':') ? (c.name.split(':')[0] ?? '') : '')).filter(Boolean)
-  } catch {
-    // Unknown: settings alone decide.
-  }
-  // Both reads failed: unknown, so show nothing rather than a false "0/4".
-  if (enabled !== undefined || loaded.length) {
-    st.dirs = directiveState(enabled, loaded)
-    st.directives = directivesNote(enabled, loaded)
-  }
-  try {
-    const v = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: string }
-    if (typeof v.version === 'string') st.version = v.version
-  } catch {
-    // The version is only shown.
-  }
-  note(st, 'start', `company ${st.version} on: charter, router, governor, meter, diet, crew ${crew}/${CREW.length}, ${st.directives}`)
-  try {
-    await applyLimits($, st, (await $.session.usage()).rateLimits)
-  } catch {
-    showStatus($, st)
-  }
-  return crew
-}
-
-// Apply one reading of the rate-limit windows. Best-effort: never throws.
-async function applyLimits(
-  $: EngineInterface,
-  st: MeterState,
-  limits: Parameters<typeof readWindows>[0],
-) {
-  try {
-    // A reading without a window keeps the last known value of that window.
-    const w = { ...st.windows, ...readWindows(limits) }
-    const was = st.economy
-    st.windows = w
-    st.economy = nextEconomy(was, w)
-    if (st.economy !== was) {
-      note(st, 'meter', st.economy ? `economy ON at 5h ${Math.round(w.fiveHour ?? 0)}% · week ${Math.round(w.week ?? 0)}%` : 'economy off')
-      try {
-        if (st.economy) {
-          const five = w.fiveHour ?? 0
-          $.ui.toast(
-            five >= 90
-              ? `Economy mode on: five-hour window at ${Math.round(five)}%`
-              : `Economy mode on: weekly window at ${Math.round(w.week ?? 0)}%`,
-          )
-        } else {
-          $.ui.toast(
-            `Economy mode off: five-hour window at ${Math.round(w.fiveHour ?? 0)}%, weekly at ${Math.round(w.week ?? 0)}%`,
-          )
-        }
-      } catch {
-        // A toast failing changes nothing.
-      }
-    }
-    try {
-      if (st.economy && !was) st.economySince = Number(await $.clock.now())
-      if (!st.economy) st.economySince = undefined
-      await $.store.set('meter', {
-        ...(st.economySince !== undefined ? { economySince: st.economySince } : {}),
-        ...(w.fiveHour !== undefined ? { lastFiveHour: w.fiveHour } : {}),
-        ...(w.week !== undefined ? { lastWeek: w.week } : {}),
-      })
-    } catch {
-      // Persisting is best-effort.
-    }
-  } catch {
-    // Leave the previous values.
-  }
-  showStatus($, st)
-}
+import { governEffort, modelFamily, recordGoverned } from './governor'
+import { applyLimits, boot, note, readPanel, showStatus, type MeterState } from './host'
 
 export const register: Register = (on, options) => {
   // Effort remembered per routed subagent, by the agentId the spawn resolves with.
@@ -284,7 +47,7 @@ export const register: Register = (on, options) => {
     } catch (err) {
       placed = `Panel: refused (${String(err).slice(0, 120)}). Live actions show as "company ·" lines in the chat.`
     }
-    return { text: panelText(await read($, panel), placed) }
+    return { text: panelText(await readPanel($), placed) }
   })
 
   on('session.attach', async ($, e, next) => {
@@ -498,7 +261,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: 'company' }, async ($, e) => {
     const ui = $.ui.resolve(e)
-    return PanelView(ui, await read($, panel))
+    return PanelView(ui, await readPanel($))
   })
 
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {

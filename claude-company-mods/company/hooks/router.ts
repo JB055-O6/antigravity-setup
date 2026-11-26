@@ -1,4 +1,5 @@
 // The model router's pure logic: no `$`, no I/O.
+import { CREW } from './crew'
 
 export type Route = {
   model: 'haiku' | 'sonnet' | 'opus' | 'fable'
@@ -9,7 +10,7 @@ export type Route = {
 export type TaskClass = 'lookup' | 'review' | 'architecture' | 'research' | 'code'
 
 // Names of the pinned crew (registered as `company:<name>`).
-export const CREW_NAMES = ['scout', 'builder', 'reviewer', 'architect', 'sage'] as const
+export const CREW_NAMES = CREW.map((a) => a.name)
 
 // Whole words and phrases, case-insensitive. Spaces in a phrase match any run
 // of whitespace; the `\b` ends keep "designer" from being "design".

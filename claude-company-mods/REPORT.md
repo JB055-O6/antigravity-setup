@@ -148,7 +148,7 @@ All by manager (me). All fixed.
 5. Old test expected Fable kept after the no-Fable change. Test fixed.
 6. Directives check said caveman, headroom missing. They were on (account-synced plugins not in settings list). Fixed: also read loaded plugins. Test added.
 7. Package 0.9.0 said version 0.6.0 inside (old manifest copied over). Code was right. Fixed: 0.9.1, version checked inside zip.
-8. Saving claim wrong (found 2026-11-26 by audit). Benchmark always ran stock first, so stock paid cold-cache cost. Me not check cache-create vs cache-read before claim. Fix: claim pulled; new benchmark has warm-up run, rotated order, n≥4, failed runs not counted as $0, cache-normalised cost.
+8. Saving claim wrong (found 2026-11-26 by audit). Benchmark always ran stock first, so stock paid cold-cache cost. Me not check cache-create vs cache-read before claim. Fix: claim pulled; new benchmark has warm-up run, rotated order, n≥4, failed runs not counted as $0, cache-normalised cost. First fix missed PROJECT.md:229,258; fixed same day.
 
 ## Files
 

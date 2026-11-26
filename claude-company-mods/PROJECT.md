@@ -226,7 +226,7 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 ## Change log 2026-11-19: 0.6.1 + measurement round 1
 - Charter: "Scope of the directives: everything built from now on carries all four, main loop and every subagent." Test added. 139/139 pass.
 - Measurement r1 (Opus medium main loop, n=1 per cell, company@synced off in base, four directive plugins on in both):
-  T1 subagent lookup: base $0.269, mod $0.125 (-54%, subagent on Haiku). T2 big-file line: $0.085 vs $0.088. T3 count: $0.085 vs $0.088. 6/6 correct.
+  T1 subagent lookup: base $0.269, mod $0.125 (-54%, subagent on Haiku). T2 big-file line: $0.085 vs $0.088. T3 count: $0.085 vs $0.088. 6/6 correct. [WRONG 2026-11-26: base ran with cold cache; see REPORT.md mistake #8]
   Overhead: about +1.8K input tokens per request (charter + crew). Read/Grep caps not triggered.
 - Proposed to client: compact charter to cut overhead. Next: round 2 with an edit task and n=2.
 
@@ -255,7 +255,7 @@ Source files: /tmp/claude-0/bundled-skills/2.1.325/ba7bef350ec23e0a3fdb60d29a103
 - Windows settings line: cannot reach client PC (cloud session; ~/.claude is a hidden folder, not attachable). PowerShell command given, untested (pwsh download blocked by safety check).
 
 ## 2026-11-19 09:15 UTC: measurement done; 0.9.1
-- r2 (16 runs, n=2, mod 0.9.x code): 16/16 correct. Stock $0.989, mod $0.824 (-16.7%). Lookup -42.5%, big-line -2.9%, count +3.2%, bug fix +4.0%.
+- r2 (16 runs, n=2, mod 0.9.x code): 16/16 correct. Stock $0.989, mod $0.824 (-16.7%). Lookup -42.5%, big-line -2.9%, count +3.2%, bug fix +4.0%. [WRONG 2026-11-26: cold-cache base run; fair total stock $0.809 vs mod $0.824 (+2%). See REPORT.md mistake #8]
 - Held bench: Opus low on 6 tool tasks, headless, no user settings: 6/6 (p19 20/20, p21 6/6, p24 7/7, p25 10/10 mutants, p26 3/3, p27 2/2), $0.8427 total. Fable x3 dropped (credits).
 - Manager defect (rule 19): 0.9.0 package carried version 0.6.0 (W manifest copied over M). Fixed as 0.9.1 in M, W and repo; version read from inside the zip.
 - Report updated; all queue items closed.

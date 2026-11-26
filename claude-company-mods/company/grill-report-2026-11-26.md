@@ -264,3 +264,20 @@ Where no screen part exists (cloud web): the same text in `/company` and in "com
 
 ### Estimated total effort (human-days; agent time is shorter)
 - Phase 1: 1 d · Phase 2: 5 d · Phase 3: 3 d · Phase 4: 0.5 d (opportunistic) · **Total: ≈9.5 d**
+
+## Addendum: second sweep (same day, after the client asked "is this all?")
+
+The audit cannot prove that nothing is missing. This sweep closed some gaps and lists the rest.
+
+New items:
+- **F33 [MEDIUM][O]** The first correction missed `PROJECT.md:229,258`, which still showed −54% and −16.7%. Both are now marked WRONG. Recorded under REPORT.md mistake #8.
+- **F34 [MEDIUM][O]** `governor.ts:29` raises Opus low → medium on every request, the main loop included. This overrides the person's own choice and can raise token use. Our own data shows Opus low passing 6 of 6 tool tasks ($0.84). The rule rests only on third-party index data. Fix: test it in the fair benchmark; drop it or limit it to subagents if it does not pay.
+- **F35 [O, changes F2]** Engine types (`claude-code/index.d.ts:5292-5294`): "a hook that fails is skipped: the hooks beneath and core run in its place, or its last `next` result stands". `next.called` exists (:5321). So the engine itself never runs a tool twice. The double-run risk exists only if our host catches the error and calls `next` again. Design rule: the host counts the failure, then rethrows. It never re-calls `next`.
+- **F36 [O, confirms F9]** `:19108-19109`: a `tool.call` hook "answers ahead of" PreToolUse and the permission check. The rtk rewrite runs before permissions, so the permission-gap risk is real. The fix stays: run `$.tool.check` on the original command.
+
+Still not verified (each needs a test or a live check before ship):
+1. Engine behaviour in a live session: whether `$.state` survives a reload, whether notices cost tokens, whether an effort change keeps the prompt cache, and the hook order between plugins.
+2. Router quality on real prompts: how often it sends a hard task to Haiku, which forces a costly redo. Never measured.
+3. Two sessions at once (desktop + terminal) writing the same `$.store` keys.
+4. rtk and graphify internals: rtk's tee folder and telemetry default, the `--` argument, and graphify cache growth on disk.
+5. Windows native: no PowerShell path was tested (the pwsh download was blocked earlier).

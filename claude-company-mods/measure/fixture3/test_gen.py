@@ -61,8 +61,9 @@ def tasks():
         for line in fh:
             if not re.match(r"\| T\d", line):
                 continue
-            cells = [c.strip() for c in line.strip().split("|")[1:-1]]
-            assert len(cells) == 4, f"row needs 4 cells (no | inside a cell): {line[:60]}"
+            # A pattern spells | as \| (the table escape).
+            cells = [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", line.strip())[1:-1]]
+            assert len(cells) == 4, f"row needs 4 cells: {line[:60]}"
             tid, prompt, grade, savers = cells
             kind, _, rest = grade.partition(":")
             rows[tid] = {"prompt": prompt, "kind": kind.strip(), "rules": re.findall(r"`([^`]+)`", rest)}
@@ -70,10 +71,11 @@ def tasks():
     return rows
 
 
-def check_regex(row, good, bad):
+def check_regex(row, goods, bad):
     assert row["kind"] == "regex" and row["rules"], row
     for rx in row["rules"]:
-        assert re.search(rx, good), f"rule {rx!r} rejects the correct answer:\n{good}"
+        for good in goods:
+            assert re.search(rx, good), f"rule {rx!r} rejects a correct answer:\n{good}"
     for b in bad:
         assert not all(re.search(rx, b) for rx in row["rules"]), f"rules accept a wrong answer:\n{b}"
 
@@ -140,7 +142,8 @@ def check_t1(a, row):
     assert rate.rstrip("0") == "8.125", rate
     good = "\n".join(f"{p}:{f}" for p, f in chain) + "\nPostcode 73301: 8.125%"
     stop = "\n".join(f"{p}:{f}" for p, f in chain[:4]) + "\nPostcode 73301: 8.125%"
-    check_regex(row, good, [good.replace("8.125", "8.0"), stop])
+    dotted = "\n".join(f"{p[:-3].replace('/', '.')}.{f}" for p, f in chain) + "\nThe rate is 8.125 %."
+    check_regex(row, [good, dotted], [good.replace("8.125", "8.0"), stop])
 
 
 def check_t4(a, row):
@@ -155,7 +158,8 @@ def check_t4(a, row):
             assert "ERROR" not in l or level == "ERROR", f"line {i}: ERROR outside the level field"
     assert root == 61873 and 280 <= after <= 330, (root, after)
     good = f"Root error: line {root:,}, PaymentGatewayTimeout. {after} ERROR lines follow it."
-    check_regex(row, good, [good.replace(f"{root:,}", f"{root + 1:,}"), good.replace(f" {after} ", f" {after + 1} "),
+    goods = [good, good.replace(f"{root:,}", f"{root:,}".replace(",", " ")), good.replace(f"{root:,}", str(root))]
+    check_regex(row, goods, [good.replace(f"{root:,}", f"{root + 1:,}"), good.replace(f" {after} ", f" {after + 1} "),
                             good.replace("PaymentGatewayTimeout", "CircuitOpen")])
 
 
@@ -172,7 +176,8 @@ def check_t5(a, row):
     good = f"Summary...\nAUTHORS: {', '.join(authors)}\nTICKETS: {', '.join(tickets)}\nDIRTY: {', '.join(dirty)}"
     bad = [good.replace("AUTHORS: ", f"AUTHORS: {eleventh[0]}, "), good.replace("TICKETS: ", f"TICKETS: {decoy[0]}, "),
            good.replace(f"TICKETS: {tickets[0]}, ", "TICKETS: "), good.replace(f"DIRTY: {dirty[0]}, ", "DIRTY: ")]
-    check_regex(row, good, bad)
+    styled = good.replace("AUTHORS:", "**Authors:**").replace("TICKETS:", "Tickets:").replace("DIRTY:", "`Dirty:")
+    check_regex(row, [good, styled + "`"], bad)
 
 
 def check_t6(a, row):
@@ -181,9 +186,13 @@ def check_t6(a, row):
     assert hits == [f"web/src/api.js:{js + 1}:  return request(\"POST\", \"/api/checkout\", order);"], hits
     py = line_of(os.path.join(a, "shop/web/handlers.py"), "def handle_checkout(")
     line_of(os.path.join(a, "shop/web/app.py"), 're.compile(r"^/api/checkout$"), handlers.handle_checkout)')
-    good = f"web/src/api.js:{js}\nshop/web/handlers.py:{py}"
-    check_regex(row, good, [f"web/src/api.js:{js + 1}\nshop/web/handlers.py:{py}",
-                            f"web/src/api.js:{js}\nshop/web/app.py:{py}"])
+    goods = [f"web/src/api.js:{js}\nshop/web/handlers.py:{py}", f"api.js:{js}\nhandlers.py:{py}",
+             f"[api.js:{js}](web/src/api.js#L{js})\n[handlers.py:{py}](shop/web/handlers.py#L{py})",
+             f"`submitOrder` web/src/api.js:{js}, `handle_checkout` shop/web/handlers.py:{py}"]
+    check_regex(row, goods, [f"web/src/api.js:{js + 1}\nshop/web/handlers.py:{py}",
+                             f"web/src/api.js:{js}\nshop/web/app.py:{py}",
+                             f"api.js:{js - 1}-{js + 1}, {js} / handlers.py:{py - 3}, {py}, {py + 7}",
+                             f"api.js:{js}-{js + 1}\nhandlers.py:{py}", f"api.js:{js}\nhandlers.py:{py}, {py + 1}"])
 
 
 def check_t1_big(row):
@@ -198,8 +207,11 @@ def check_t1_big(row):
         "4b40414:claude-company-mods/company/hooks/register.tsx:459:      const g = governEffort(model, effort, st.economy)",
     ], calls
     base = "claude-company-mods/company/hooks/"
-    good = f"{base}governor.ts:21\n{base}register.tsx:459"
-    check_regex(row, good, [f"{base}governor.ts:29\n{base}register.tsx:459", f"{base}governor.ts:21\n{base}register.tsx:460"])
+    goods = [f"{base}governor.ts:21\n{base}register.tsx:459", "governor.ts:21\nregister.tsx:459",
+             f"[governor.ts:21]({base}governor.ts#L21)\n[register.tsx:459]({base}register.tsx#L459)"]
+    check_regex(row, goods, [f"{base}governor.ts:29\n{base}register.tsx:459",
+                             f"{base}governor.ts:21\n{base}register.tsx:460",
+                             "governor.ts:20, 21, 29\nregister.tsx:459", "governor.ts:21\nregister.tsx:458-460"])
 
 
 def check_t2(work, row, gen):
@@ -209,6 +221,19 @@ def check_t2(work, row, gen):
     path, old, new = gen.T2_FIX
     edit(os.path.join(work, path), old, new)
     assert grade(row, work) == 0, "T2 fails after the reference fix"
+    for path, text, verdict in [("tests/conftest.py", "", "a new tests/conftest.py"),
+                                ("conftest.py", "", "a new root conftest.py"),
+                                ("pytest.ini", "[pytest]\n", "a new pytest.ini"),
+                                ("pyproject.toml", "[tool.pytest.ini_options]\naddopts = '-q'\n", "pytest config in pyproject.toml"),
+                                ("setup.cfg", "[tool:pytest]\n", "pytest config in setup.cfg")]:
+        with open(os.path.join(work, path), "w", encoding="utf-8") as fh:
+            fh.write(text)
+        assert grade(row, work) != 0, f"T2 passes with {verdict}"
+        os.remove(os.path.join(work, path))
+    with open(os.path.join(work, "pyproject.toml"), "w", encoding="utf-8") as fh:
+        fh.write("[project]\nname = 'shop'\n")
+    assert grade(row, work) == 0, "T2 fails on a pyproject.toml with no pytest section"
+    os.remove(os.path.join(work, "pyproject.toml"))
     edit(os.path.join(work, "tests/test_engine.py"), "def test_mixed_cart", "def _test_mixed_cart")
     assert grade(row, work) != 0, "T2 passes with an edited test"
     with open(os.path.join(work, "logs", "app.log"), "a", encoding="utf-8") as fh:

@@ -28,3 +28,13 @@ jobs:
           else echo "::error::no engine types written"; exit 1; fi
       - run: bash claude-company-mods/check.sh
       - run: python3 -m py_compile claude-company-mods/measure/*.py
+      # Fixture 3 self-test: pytest at the version in fixture3/README.md; T1-big needs commit
+      # 4b40414, so fetch that one commit into the shallow checkout.
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.13' }
+      - name: Fixture 3 self-test
+        run: |
+          V=$(grep -oE 'pytest [0-9]+\.[0-9]+\.[0-9]+' claude-company-mods/measure/fixture3/README.md | head -1 | cut -d' ' -f2)
+          python3 -m pip install "pytest==$V"
+          git fetch --no-tags --depth=1 origin 4b40414ba7be15c00e1d0f85cbc77655eebeb2db
+          python3 -I claude-company-mods/measure/fixture3/test_gen.py

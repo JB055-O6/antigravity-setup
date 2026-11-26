@@ -16,17 +16,18 @@
 - **CHECK** (run at the end of every task; all must hold): `bash claude-company-mods/check.sh` prints `TEST OK <n> pass 0 fail`, `VALIDATE OK`, `TSC OK`.
 - One hooks module: `hooks/hooks.json` stays `{ "modules": ["./register.tsx"] }`. No `import()`.
 - Validator rules (engine, verified): `$` may be passed only to a function declared at the top of its file (a function declaration or a const bound to one) or imported from the mod's own files; `$` is otherwise only spelled `$.noun.method(...)`; every `on` call is `on("<string literal event>", [matcher,] hook)`. So `ctx` holds no `$`, and no helper calls a hook it got as a parameter.
-- Guard pattern for every hook (copy exactly; generator form for `turn.step`):
+- Guard pattern for every hook (copy exactly; generator form for `turn.step`; amended in Task 6 — `ok(ctx)` after success resets the failure streak):
   ```ts
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     if (!isOn(ctx)) return next(e)
-    try { return await bashcapCall($, e, next, ctx) } catch (err) { fail(ctx, err); throw err }
+    try { const r = await bashcapCall($, e, next, ctx); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
   })
-  on('turn.step', async function* ($, e, next) {
+  on('turn.step', {}, async function* ($, e, next) {
     if (!isOn(ctx)) return yield* next(e)
-    try { return yield* governStep($, e, next, ctx) } catch (err) { fail(ctx, err); throw err }
+    try { const r = yield* governStep($, e, next, ctx); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
   })
   ```
+- Module wiring (validator-proven in Task 6): each module file exports a top-level `export function register<Name>(on: On, ctx: Ctx): void` (e.g. `registerBashcap`); `register.tsx` imports each by name and calls them one by one in the spec order (no loop, no `m.register(...)`, which the validator refuses). The same event may be hooked by several modules only when every hook after the first carries a matcher; use `{}` for "match all" (`on('session.start', {}, hook)`). Chain order = call order in register.tsx.
 - Caps: charter section ≤ 4,800 chars, its bytes fixed for the whole session; subagent prompt additions ≤ 2,000 chars; graph hint ≤ 320 chars; graphify command output ≤ 6 KB.
 - Bash cap: output > 30 KB → keep 12 KB head + 12 KB tail; economy: > 15 KB → 6 KB + 6 KB; keep up to 40 cut lines matching `/error|fail|exception|traceback|fatal/i`; cut on code points. If V11 (Task 10) shows the engine already cuts near 30,000 chars, the threshold becomes 12 KB (head 5 KB + tail 5 KB).
 - Breaker: 3 consecutive failures → module off for this session only; a timeout counts as a failure; a missing binary is `off: not installed`, not a failure; `/company on <id>` turns it back on.
@@ -161,7 +162,7 @@
   - `export type Entry = { added: number; saved: number; acted: number }` (tokens, estimates)
   - `export type Shared = { health: Record<ModuleId, Health>; ledger: Record<ModuleId, Entry>; efforts: Map<string, string>; runs: CrewRun[]; runByTool: Map<string, string>; economy: boolean; windows: Windows; log: PanelLine[]; seq: number; version: string; offMachine: boolean; deviceAttached: boolean; dirty: boolean }`
   - `export type Ctx = { id: ModuleId; caps: Caps; shared: Shared }`
-  - `export type Module = { id: ModuleId; title: string; what: string; caps: Caps; register: (on: On, ctx: Ctx) => void }`
+  - `export type ModuleMeta = { id: ModuleId; title: string; what: string; caps: Caps }` (no register function: modules export named `register<Name>(on, ctx)` instead)
   - `export function createShared(ids: readonly ModuleId[]): Shared`
   - `export function isOn(ctx: Ctx): boolean` · `export function fail(ctx: Ctx, err: unknown): void` (streak +1, fails +1, `lastErr` = `redact(String(err)).slice(0, 120)`, off with `'errors'` at streak 3) · `export function ok(ctx: Ctx): void` (streak 0) · `export function setOff(ctx: Ctx, why: OffReason): void` · `export function setOn(ctx: Ctx): void`
   - `export function added(ctx: Ctx, chars: number): void` · `export function saved(ctx: Ctx, tokens: number): void` · `export function acted(ctx: Ctx, n?: number): void` · `export function noteOf(ctx: Ctx, text: string): void` (redacted, pushes to `shared.log`, keeps the last 40)
@@ -169,7 +170,7 @@
   - `export function cutCodePoints(s: string, maxChars: number): string` · `export function estimateTokens(chars: number): number` · `export function redact(s: string): string`
   - `export const FAIL_LIMIT = 3`
   - `export function envOff(value: string | undefined): ModuleId[]` (parses `COMPANY_OFF=rtk,graph`; the host reads the variable once at `session.start` through the engine's env API and calls `setOff(ctx, 'env')` for each id)
-- Produces (`modules/index.ts`): `export const MODULES: readonly Module[]` in the spec order (charter, meter, router, governor, diet, bashcap, rtk, graph, audit, nudge, install, dashboard); empty stubs for modules not yet built.
+- Produces (`modules/index.ts`): `export const MODULE_META: readonly ModuleMeta[]` in the spec order (charter, meter, router, governor, diet, bashcap, rtk, graph, audit, nudge, install, dashboard) — the dashboard and health read it; `register.tsx` calls the named `register<Name>` functions in the same order (a test checks the two orders match). Modules not yet built have meta only.
 - Consumes: `CrewRun`, `PanelLine` from `../types`; `Windows` from `governor.ts`.
 
 - [ ] **Step 1: Spike the guard pattern.** Add one stub module with one `tool.call` Bash hook in the exact Global Constraints form, with a top-level helper in the same file. Run `claude plugin validate $R`. Expected: `Validation passed`. If it is refused, stop and report the exact message; the pattern must be fixed before any port.

@@ -34,7 +34,8 @@ export function registerRtk(on: On, ctx: Ctx): void {
   on('session.start', {}, async ($, e, next) => {
     await ready($, ctx.shared)
     if (!isOn(ctx)) return next(e)
-    try { const r = await rtkStart($, e, beneath(next), ctx, rt); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
+    // No ok() here: rtkStart calls it once the probe found rtk, so a hung probe builds the streak.
+    try { return await rtkStart($, e, beneath(next), ctx, rt) } catch (err) { fail(ctx, err); throw err }
   })
   // Observe only: a new turn may read `rtk gain` again.
   on('turn.start', (_, e, next) => {
@@ -89,6 +90,7 @@ async function rtkStart($: EngineInterface, e: Parameters<Start>[1], next: Param
     }
     return next(e)
   }
+  ok(ctx)
   // The start total, so the first turn's delta is this session's alone.
   rt.gain = await gainTotal($, rt.bin)
   if (await $.fs.exists(`${e.cwd}/${FILTERS}`).catch(() => false)) noteOf(ctx, `This repo has RTK filters in ${FILTERS}. Company does not trust them.`)

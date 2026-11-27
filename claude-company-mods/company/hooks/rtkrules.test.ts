@@ -103,17 +103,24 @@ test('inMode: light takes the read-only forms, full adds more read-only forms', 
     'rtk git branch -a', 'rtk ls -la', 'rtk tree -L 2', 'rtk tree -a', 'rtk find . -name "*.ts" -type f', 'rtk wc -l a', 'rtk grep -rn foo .',
     'rtk rg -n "a|b" src', "rtk ls 'a b*'", 'rtk git branch 2>/dev/null', 'rtk docker ps', 'rtk docker images', 'rtk docker logs x', 'rtk kubectl get pods', 'rtk kubectl describe pod x',
     'rtk kubectl logs x', 'rtk git status; false', 'rtk git log -5 || true', 'rtk git status 2>&1', 'rtk ls 2>/dev/null', 'rtk git diff >/dev/null',
-    "rtk git log --format='%h $s'", 'rtk find . \\( -name a -o -name b \\)',
+    "rtk git log --format='%h $s'", 'rtk git log --oneline -n 5 --author=me --since "2 weeks" -- src', 'rtk git log -n5 --pretty=oneline',
+    'rtk find . -maxdepth 2 -mtime -7 -name "*.md"', "rtk grep -rn -e foo -A 2 --include='*.ts' .", 'rtk rg -S -g "*.ts" --type ts -C2 foo',
+    'rtk kubectl get pods -n dev -o wide -l app=x', 'rtk kubectl logs x -c app --tail=50', 'rtk docker ps -aq --format "{{.Names}}"',
+    'rtk docker logs --tail 20 x', 'rtk ls -laR src', 'rtk git branch -avv', 'rtk git status -sb -- src', 'cd x && rtk git log -5 && cat a',
   ]) {
     expect([c, inMode(c, 'light')]).toEqual([c, true])
     expect([c, inMode(c, 'full')]).toEqual([c, true])
   }
-  for (const c of ['rtk git stash list', 'rtk diff a b', 'rtk gh pr list', 'rtk gh issue view 3', 'rtk docker compose ps', 'rtk du -sh .', 'rtk df -h', 'rtk jq . a.json', 'rtk pip list', 'rtk helm list']) {
+  for (const c of ['rtk git stash list', 'rtk diff a b', 'rtk diff -u a b']) {
     expect([c, inMode(c, 'light')]).toEqual([c, false])
     expect([c, inMode(c, 'full')]).toEqual([c, true])
   }
-  // Test runners are not on the list (yet), and cat, head and tail stand only as typed.
-  for (const c of ['rtk pytest -q', 'rtk cargo test', 'rtk go test ./...', 'rtk jest', 'rtk read README.md', 'rtk cat a', 'rtk head -5 a', 'rtk cd x && rtk ls', 'rtk gitx', 'rtk git-foo']) {
+  // Test runners and unreviewed tools are not on the list, and cat, head and tail stand only as typed.
+  for (const c of [
+    'rtk pytest -q', 'rtk cargo test', 'rtk go test ./...', 'rtk jest', 'rtk read README.md', 'rtk cat a', 'rtk head -5 a', 'rtk cd x && rtk ls', 'rtk gitx',
+    'rtk git-foo', 'rtk gh pr list', 'rtk docker compose ps', 'rtk du -sh .', 'rtk df -h', 'rtk jq . a.json', 'rtk pip list', 'rtk helm list',
+    'rtk find . \\( -name a -o -name b \\)',
+  ]) {
     expect([c, inMode(c, 'light'), inMode(c, 'full')]).toEqual([c, false, false])
   }
   expect(FORMS.every((f) => f.words.length > 0)).toBe(true)
@@ -137,7 +144,25 @@ const FORBIDDEN = [
   'git log *', 'ls ?', 'git diff -- [ab].ts', 'find . -name *.ts',
   // bash splits words on space and tab only.
   'git\u00a0push', 'git log\u00a0--output=x',
+  // Review round 2: flags off a form's list ran a program or wrote a file.
+  'rg --hostname-bin=./hb.sh --hyperlink-format=default foo', 'pip list --log x.txt', 'pip list --cache-dir x', 'tree -R -L 1 -H .',
+  'kubectl get pods --profile=heap --profile-output=k.pprof',
+  // A value that is the tool's option, not the flag's value: optional values only as `--x=v`.
+  'git log --pretty --output=x', 'git log -n --output=x', 'git log --format --output=x', 'git log --stat=1 --output=x',
+  'kubectl get pods -o jsonpath={.x}', 'kubectl get pods -o=json', 'git log -nx', 'tree -L x', 'docker logs --tail all x',
 ] as const
+
+// Each form refuses a flag that is not on its own list, long and short.
+test('every form refuses an unknown flag', () => {
+  for (const f of FORMS) {
+    const known = (f.flags.short ?? '') + (f.flags.shortValue ?? '')
+    const letter = [...'ZQXYKJ'].find((c) => !known.includes(c))!
+    for (const flag of f.flags.find ? ['-delete', '-exec', '-fprint'] : ['--company-unknown', `-${letter}`]) {
+      const cmd = [...f.words, flag, 'x'].join(' ')
+      expect([cmd, inMode(cmd, 'full'), inMode(`rtk ${cmd}`, 'full')]).toEqual([cmd, false, false])
+    }
+  }
+})
 
 test('forbidden forms: never rewritten in light or full, whatever rtk offers', () => {
   for (const cmd of FORBIDDEN) {

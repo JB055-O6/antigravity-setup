@@ -188,6 +188,17 @@ test('a --version that times out is a failure, not missing; rtk then rests', asy
   expect(read('health').rtk).toMatchObject({ on: true, fails: 1, lastErr: expect.stringContaining(TIMEOUT) })
 })
 
+test('a --version that hangs in three sessions in a row turns rtk off', async ($, on) => {
+  quiet(on)
+  const read = state(on)
+  const r = rtk(on, { version: 'timeout' })
+  for (let n = 0; n < 4; n++) await $.session.start({ ...START })
+  // Off after the third: the fourth start never probes.
+  expect(r.runs).toEqual(Array(3).fill(['rtk', '--version']))
+  await $.session.end({ ...END })
+  expect(read('health').rtk).toMatchObject({ on: false, off: 'errors', fails: 3, streak: 3 })
+})
+
 test('a binary gone in mid-session: off as not installed, not a failure', async ($, on) => {
   quiet(on)
   const read = state(on)
@@ -340,14 +351,14 @@ test('under CI rtk is off (cloud) and never probed', async ($, on) => {
   expect(read('health').rtk).toMatchObject({ on: false, off: 'cloud', fails: 0 })
 })
 
-for (const [env, want] of [[{}, 'du -sh .'], [{ COMPANY_RTK_MODE: 'full' }, 'rtk du -sh .']] as [Record<string, string>, string][]) {
-  test(`mode ${env.COMPANY_RTK_MODE ?? 'light (the default)'}: du is full only, grep is in both`, async ($, on) => {
+for (const [env, want] of [[{}, 'diff a b'], [{ COMPANY_RTK_MODE: 'full' }, 'rtk diff a b']] as [Record<string, string>, string][]) {
+  test(`mode ${env.COMPANY_RTK_MODE ?? 'light (the default)'}: diff is full only, grep is in both`, async ($, on) => {
     quiet(on, env)
     rtk(on, { rewrite: (c) => ({ stdout: `rtk ${c}`, exitCode: 3 }) })
     perms(on)
     const seen = bash(on)
     await $.session.start({ ...START })
-    await $.tool.call({ tool: 'Bash', command: 'du -sh .' })
+    await $.tool.call({ tool: 'Bash', command: 'diff a b' })
     await $.tool.call({ tool: 'Bash', command: 'grep -rn foo .' })
     expect(seen).toEqual([want, 'rtk grep -rn foo .'])
   })

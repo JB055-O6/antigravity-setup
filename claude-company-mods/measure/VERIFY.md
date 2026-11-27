@@ -1,0 +1,5 @@
+# Live checks
+
+| ID | Check | Method | Evidence | Result |
+|----|-------|--------|----------|--------|
+| V11 | The engine's own Bash output limit | 2026-11-27, Claude Code 2.1.332: `claude -p` in a scratch dir (haiku, `company@synced` off, no `--plugin-dir`, `--output-format stream-json --verbose`), one Bash call `python3 -c "print('x'*100000)"`; tool_result length read from the jsonl. Then a probe mod logged each `tool.call` Bash result: 20,000 chars; 15,001 stdout + 15,000 stderr; 20,000 chars with exit 1. | The model got 2,320 chars: `<persisted-output>` "Output too large (97.7KB). Full output saved to: …/tool-results/<id>.txt" and a 2 KB preview; the record held stdout 30,000 chars, `persistedOutputSize` 100001. 20,000 chars reached the model whole; 30,001 chars (stderr joins stdout) were persisted the same way; an exit-1 result was cut to 10,040 chars of error text. | The engine already cuts at 30,000 chars. bashcap acts above 12 KB (keeps 5 KB head + 5 KB tail); economy above 6 KB (2.5 KB + 2.5 KB). |

@@ -3,6 +3,7 @@ import { PANE_ID, PanelView, panelText } from './panel'
 import { boot, readPanel, readPlace, showStatus } from './host'
 import { createShared, envOff, noteOf, resetHealth, setOff, type Ctx, type ModuleId } from './core'
 import { MODULE_META } from './modules'
+import { registerBashcap } from './modules/bashcap'
 import { registerCharter } from './modules/charter'
 import { registerDiet } from './modules/diet'
 import { registerGovernor } from './modules/governor'
@@ -110,4 +111,5 @@ export const register: Register = (on, options) => {
   registerRouter(on, use('router'))
   registerGovernor(on, use('governor'))
   registerDiet(on, use('diet'))
+  registerBashcap(on, use('bashcap'))
 }

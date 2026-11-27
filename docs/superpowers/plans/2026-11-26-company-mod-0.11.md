@@ -28,7 +28,7 @@
   })
   ```
 - Module wiring (validator-proven in Task 6): each module file exports a top-level `export function register<Name>(on: On, ctx: Ctx): void` (e.g. `registerBashcap`); `register.tsx` imports each by name and calls them one by one in the spec order (no loop, no `m.register(...)`, which the validator refuses). The same event may be hooked by several modules only when every hook after the first carries a matcher; use `{}` for "match all" (`on('session.start', {}, hook)`). Chain order = call order in register.tsx.
-- Caps: charter section ≤ 4,800 chars, its bytes fixed for the whole session; subagent prompt additions ≤ 2,000 chars; graph hint ≤ 320 chars; graphify command output ≤ 6 KB.
+- Caps: charter section ≤ 9,000 chars (raised by spec §16 for the caveman + headroom rule text), its bytes fixed for the whole session; subagent prompt additions ≤ 4,000 chars; graph hint ≤ 320 chars; graphify command output ≤ 6 KB.
 - Bash cap: output > 30 KB → keep 12 KB head + 12 KB tail; economy: > 15 KB → 6 KB + 6 KB; keep up to 40 cut lines matching `/error|fail|exception|traceback|fatal/i`; cut on code points. If V11 (Task 10) shows the engine already cuts near 30,000 chars, the threshold becomes 12 KB (head 5 KB + tail 5 KB).
 - Breaker: 3 consecutive failures → module off for this session only; a timeout counts as a failure; a missing binary is `off: not installed`, not a failure; `/company on <id>` turns it back on.
 - Token estimate: `Math.ceil(chars / 4)`, always labelled "estimate". The band shows **net** = saved − added, negative when negative.
@@ -51,6 +51,13 @@
 5. **Very large numbers on the band (sessions past 1,000,000 tokens)**: the user expects short, readable numbers. Test in Task 16: `formatTokens(1234567) === '1.2 M'`, `formatTokens(31200) === '31,200'`, `formatTokens(-1200) === '−1,200'`.
 
 ---
+
+## Automation amendments (spec §16, client 2026-11-27) — these override the task text below
+
+- **No slash commands.** Task 14 becomes the **setup** module: a one-time `$.ui.ask` box at session start (once per machine via a `$.store` flag; never in cloud, CI or when `$.ui.ask` rejects as in `-p`). Yes → install rtk + graphify (pinned), add mirrored read-only rtk allow rules for commands the user already allows, add `prependPlugins: ["company@synced"]`; settings merged as JSON with a backup `settings.json.company-bak`, refuse on invalid JSON, record what was added. Exports `undoSetup` for the pane's **Undo setup** button and `runSetup` for its **Set up** button. Tests: consent yes/no, invalid JSON refused, backup written, only read-only mirrors added, never `Bash(rtk:*)`, undo removes only added entries, cloud/CI/-p never asks.
+- **Task 15** rule changes from "copy only when the plugin is missing" to "inject when the rules are not active": ponytail and i-have-adhd are active through their own hooks when enabled; caveman and headroom are always injected from the installed plugin's SKILL.md body (frontmatter stripped; read once at session start), else from the built-in compact copy. Tests: caveman + headroom text present even when both plugins are enabled; ponytail text absent when ponytail is enabled; caps 9,000 / 4,000 hold.
+- **Task 16** drops all `/company` subcommands. The pane gets buttons: **Turn on** per off module, **Set up** when setup is not done, **Undo setup** when it is. `/company` stays an optional text copy. Notices are deduplicated per kind (fixes the T8 flood).
+- **Task 13** never needs a command: auto-build and auto-update only.
 
 ## Phase A: safety net and fair measurement
 

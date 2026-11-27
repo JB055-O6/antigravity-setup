@@ -223,3 +223,20 @@ Manager calls (correct any):
 - **New check V11:** measure the engine's own Bash output limit live. If the engine already cuts output at about 30k chars, bashcap's threshold moves below it (12 KB) so the cap and the saved full output still act.
 
 Client answers: Q1 test limit: no fixed cap, take the time needed, parallel, no mistakes. Q2 ship rule: section 10.1. Q3 cloud: no installs. Q4 savers copy: only for missing plugins.
+
+## 16. Automation redesign (client, 2026-11-27): no slash commands
+
+Client: "a mod is to automate this stuff for me, not for me to prompt it by slash commands." Every core goal runs by itself in every session.
+
+Facts checked: ponytail and i-have-adhd turn on through their own SessionStart hooks (always on). caveman (SKILL.md 2,516 B) and headroom (1,500 B) are skill-only: they do nothing until invoked. rtk can rewrite only when the rtk form is allowed by the user's permission rules, so in default/auto mode it rarely acts. `$.ui.ask` (engine AskUserQuestion box; rejects in `-p`) and pane `Button onPress` exist.
+
+Changes:
+1. **No required command.** Nothing needs a slash command. `/company` stays only as an optional text copy of the dashboard for screens with no pane; all its subcommands (`install`, `on <id>`, `graph`) are removed.
+2. **Savers are active, not just installed.** Rule: "inject a saver's rules when they are not already active". Active = the plugin is enabled and turns its rules on by itself (ponytail, i-have-adhd). caveman and headroom are always injected: the mod reads the installed plugin's SKILL.md body at session start (frontmatter stripped) so updates flow in; if the plugin is missing, it uses its built-in compact copy. The same text goes into the subagent block. Charter section cap rises to 9,000 chars (bytes fixed per session); subagent additions cap rises to 4,000 chars. The benchmark measures this cost.
+3. **One-time setup box** (session start, once per machine, never in cloud, CI or `-p`): `$.ui.ask` "Company can set up this machine. It installs RTK and graphify, lets RTK shrink read-only commands you already allow, and loads Company first. Set it up now?" → Yes / Not now. Yes does all three:
+   - install rtk (pinned v1.2.1 + SHA-256) and graphify (`graphifyy==0.9.120`);
+   - mirror allow rules: for each user allow rule `Bash(<cmd>…)` whose command is on rtk's read-only list, add the matching `Bash(rtk <form>…)` rule — never `Bash(rtk:*)`, never a mutating form;
+   - add `"prependPlugins": ["company@synced"]`.
+   Settings are read, merged as JSON (invalid JSON → refuse and say so), backed up to `settings.json.company-bak`, and written; the mod records exactly what it added. "Not now" → the box does not come back by itself; the dashboard shows "Setup: not done" with a **Set up** button. An **Undo setup** button removes only what the mod added.
+4. **Self-recovery.** A module switched off by errors comes back on at the next session by itself; its pane box also has a **Turn on** button.
+5. **Display, always on.** Band above the prompt (terminal, desktop, mobile); pane opens by itself on desktop at start and attach; cards under tool rows; chat notices only where no pane shows, deduplicated per kind; cloud web: notices only.

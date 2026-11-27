@@ -6,6 +6,7 @@
 // failure, and never throws: a throw would take the other company hooks on session.start with it.
 import type { EngineInterface, Hook, MatchedHook, On } from 'claude-code'
 import { acted, beneath, fail, isOn, missing, noteOf, ok, setOff, truthy, type Ctx, type Health, type OffReason, type Shared } from '../core'
+import { bare, firstBin, graphifyPaths } from '../bins'
 import { excludeWithLine, lockState } from '../graphlock'
 import { showStatus } from '../host'
 import { ready, save } from '../persist'
@@ -20,6 +21,7 @@ type Gr = { root?: string; bin?: string; me: Omit<Lock, 'at'>; dirty: boolean }
 
 const GIT_MS = 5000
 const PROBE_MS = 5000
+const VERSION = /^graphify \d/
 // The engine's longest run: graphify's own bound.
 const RUN_MS = 600_000
 const OUT = 'graphify-out'
@@ -123,18 +125,13 @@ async function setup($: EngineInterface, cwd: string, ctx: Ctx, gr: Gr): Promise
   if (tracked.stdout.trim()) return refuse('git tracks graphify-out')
   const machine = await $.session.machine().catch(unset)
   // A binary that does not start is missing; one that times out or fails otherwise is a failure.
-  let broke: unknown
-  let bin: string | undefined
-  for (const b of machine?.sysname === 'Windows_NT' ? ['graphify', 'graphify.exe'] : ['graphify']) {
-    const v = await $.process.run([b, '--version'], { timeoutMs: PROBE_MS }).catch((err: unknown) => {
-      if (!missing(err)) broke ??= err
-    })
-    if (v && v.exitCode === 0 && /^graphify \d/.test(v.stdout)) {
-      bin = b
-      break
-    }
-  }
+  // Not on the PATH: the full path where uv, pipx or pip put it, used for every later run.
+  const win = machine?.sysname === 'Windows_NT'
+  const onPath = await firstBin($, bare('graphify', win), VERSION, PROBE_MS)
+  const found = onPath.bin !== undefined ? onPath : await firstBin($, await graphifyPaths($, win), VERSION, PROBE_MS)
+  const bin = found.bin
   if (bin === undefined) {
+    const broke = onPath.broke ?? found.broke
     if (broke !== undefined) throw broke
     setOff(ctx, 'not installed')
     noteOf(ctx, 'off: not installed')

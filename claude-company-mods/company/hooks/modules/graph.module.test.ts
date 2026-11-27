@@ -20,7 +20,8 @@ const NOTHING = 'Nothing to update or rebuild failed — check output above.\n'
 const UNREAD = `error: Cannot read ${GRAPH} for incremental merge: Expecting value: line 2 column 1 (char 12). Delete the file and run a full rebuild.\n${NOTHING}`
 // `same`: graphify found no node or edge to change, so graph.json stays as it is.
 type Run = { exitCode: number; stdout?: string; stderr?: string; same?: boolean }
-type World = { git?: boolean; badWrite?: string; top?: Run; tracked?: string; graphify?: boolean; update?: () => Run | Promise<Run>; files?: Record<string, string>; links?: string[]; procs?: number[]; env?: Record<string, string> }
+// `bin`: graphify answers only by this name or path. `uvBin`: what `uv tool dir --bin` prints; `pipScripts`: pip's --user scripts folder.
+type World = { bin?: string; uvBin?: string; pipScripts?: string; git?: boolean; badWrite?: string; top?: Run; tracked?: string; graphify?: boolean; update?: () => Run | Promise<Run>; files?: Record<string, string>; links?: string[]; procs?: number[]; env?: Record<string, string> }
 
 // The plugin's own graph runs. The hooks here stand for the engine beneath it: git, graphify,
 // files, clock, notices, and $.state (read after session.end writes health and the ledger).
@@ -62,8 +63,11 @@ function world(on: On, o: World = {}) {
     if (cmd === 'git rev-parse --show-toplevel') return res(o.top ?? { exitCode: 0, stdout: '/repo\n' })
     if (cmd === 'git ls-files graphify-out') return res({ exitCode: 0, stdout: o.tracked ?? '' })
     if (cmd === 'git rev-parse --git-path info/exclude') return res({ exitCode: 0, stdout: '.git/info/exclude\n' })
-    if (o.graphify !== false && cmd === 'graphify --version') return res({ exitCode: 0, stdout: 'graphify 0.9.120\n' })
-    if (o.graphify !== false && cmd === 'graphify update /repo') {
+    const g = o.bin ?? 'graphify'
+    if (o.uvBin !== undefined && cmd === 'uv tool dir --bin') return res({ exitCode: 0, stdout: `${o.uvBin}\n` })
+    if (o.pipScripts !== undefined && e.argv[0] === 'python3' && e.argv[1] === '-c') return res({ exitCode: 0, stdout: `${o.pipScripts}\n` })
+    if (o.graphify !== false && cmd === `${g} --version`) return res({ exitCode: 0, stdout: 'graphify 0.9.120\n' })
+    if (o.graphify !== false && cmd === `${g} update /repo`) {
       const r: Run = await (o.update ?? (() => ({ exitCode: 0 })))()
       if (r.exitCode === 0 && !r.same) {
         files[GRAPH] = '{"nodes":[]}'
@@ -183,6 +187,32 @@ test('graph: no graphify is off as not installed, not a failure; the exclude fil
   await $.session.end({ ...END })
   expect(w.read('health').graph).toMatchObject({ on: false, off: 'not installed', fails: 0 })
   expect(w.writes).toEqual([])
+})
+
+for (const [where, o, bin] of [
+  ['uv tool dir --bin', { uvBin: '/home/me/.uv/bin', pipScripts: '/home/me/.local/bin' }, '/home/me/.uv/bin/graphify'],
+  ['~/.local/bin', { pipScripts: '/home/me/Library/Python/3.12/bin' }, '/home/me/.local/bin/graphify'],
+  ['the pip --user scripts folder', { pipScripts: '/home/me/Library/Python/3.12/bin' }, '/home/me/Library/Python/3.12/bin/graphify'],
+] as const) {
+  test(`graph: graphify not on the PATH but in ${where}: on, and every run uses that path`, async ($, on) => {
+    const w = world(on, { ...o, bin, env: { HOME: '/home/me' } })
+    await $.session.start({ ...START })
+    await settle()
+    await $.session.end({ ...END })
+    expect(w.read('health').graph).toMatchObject({ on: true, fails: 0 })
+    expect(w.runs.map((r) => r.cmd)).toContain(`${bin} update /repo`)
+    expect(w.runs.some((r) => r.cmd === 'graphify update /repo')).toBe(false)
+  })
+}
+
+test('graph: graphify on no PATH, not in uv, ~/.local/bin or pip: off as not installed', async ($, on) => {
+  const w = world(on, { graphify: false, uvBin: '/home/me/.uv/bin', pipScripts: '/home/me/.pip/bin', env: { HOME: '/home/me' } })
+  await $.session.start({ ...START })
+  await $.session.end({ ...END })
+  expect(w.read('health').graph).toMatchObject({ on: false, off: 'not installed', fails: 0 })
+  expect(w.runs.map((r) => r.cmd).filter((c) => c.includes('graphify') && c.endsWith('--version'))).toEqual([
+    'graphify --version', '/home/me/.uv/bin/graphify --version', '/home/me/.local/bin/graphify --version', '/home/me/.pip/bin/graphify --version',
+  ])
 })
 
 test('graph: a CI run turns the module off; no git, no graphify', async ($, on) => {

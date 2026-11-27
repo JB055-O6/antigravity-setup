@@ -6,6 +6,7 @@
 // in one notice and never throws: a throw would take the other company hooks on session.start with it.
 import type { EngineInterface, MatchedHook, On } from 'claude-code'
 import { deleteArgv } from '../bashcut'
+import { bare, firstBin, folderOf, graphifyPaths, homeDir } from '../bins'
 import { beneath, cutCodePoints, fail, isOn, missing, ok, redact, truthy, type Ctx, type SetupState, type Shared } from '../core'
 import { showStatus } from '../host'
 import { ready } from '../persist'
@@ -24,6 +25,9 @@ export const QUESTION =
 export const COMPANY = 'company@synced'
 const BASE = `https://github.com/rtk-ai/rtk/releases/download/${RTK.version}`
 const GRAPHIFY_VERSION = GRAPHIFY.split('==')[1]
+// The pinned versions as --version prints them.
+const RTK_VERSION = new RegExp(`^rtk ${RTK.version.slice(1).replace(/\./g, '\\.')}(\\s|$)`)
+const GRAPHIFY_RE = new RegExp(`^graphify ${GRAPHIFY_VERSION?.replace(/\./g, '\\.')}(\\s|$)`)
 const RUN_MS = 30_000
 const DL_MS = 300_000
 const PIP_MS = 600_000
@@ -129,10 +133,12 @@ async function setUp($: EngineInterface): Promise<End> {
   const bad = parse(await readText($, p.settings))
   if (typeof bad === 'string') return refused(p, bad)
   const rtk = await installRtk($, p)
-  if (rtk) return rtk
-  // The rtk module finds RTK on the PATH only.
-  const path = (await run($, [p.win ? 'rtk.exe' : 'rtk', '--version'], RUN_MS))?.exitCode === 0 ? '' : ` Add ${p.bin} to your PATH. Then start a new session.`
+  if (typeof rtk !== 'string') return rtk
   const graph = await installGraphify($, p)
+  // Found by a full path, not by the PATH: the modules use that path, but RTK's rewrites run rtk by
+  // its name in Bash, and your own terminal needs the PATH too.
+  const away = [...new Set([rtk, typeof graph === 'string' ? graph : ''].filter((b) => /[\\/]/.test(b)).map(folderOf))]
+  const path = away.length ? ` Add ${away.join(' and ')} to your PATH. Then start a new session.` : ''
   const rules = await mirrorRules($)
   const merged = mergeSettings(await readText($, p.settings), rules)
   if ('refuse' in merged) return refused(p, merged.refuse)
@@ -141,7 +147,7 @@ async function setUp($: EngineInterface): Promise<End> {
   const done =
     `Company added ${n} RTK allow ${n === 1 ? 'rule' : 'rules'} to ${p.settings} and loads first from the next session.` +
     (bak ? ` A copy of your old settings is in ${bak}.` : '')
-  if (graph) return { reason: graph.reason, text: `RTK ${RTK.version.slice(1)} is on this machine.${path} ${done} ${graph.text}` }
+  if (typeof graph !== 'string') return { reason: graph.reason, text: `RTK ${RTK.version.slice(1)} is on this machine.${path} ${done} ${graph.text}` }
   return { text: `Setup is done. RTK ${RTK.version.slice(1)} and graphify ${GRAPHIFY_VERSION} are on this machine.${path} ${done}` }
 }
 
@@ -156,7 +162,7 @@ async function place($: EngineInterface): Promise<Place | undefined> {
   const os = win ? 'win32' : m?.sysname === 'Darwin' ? 'darwin' : m?.sysname === 'Linux' ? 'linux' : undefined
   const hw = (m?.machine ?? '').toLowerCase()
   const arch = hw === 'x86_64' || hw === 'amd64' ? 'x64' : hw === 'arm64' || hw === 'aarch64' ? 'arm64' : undefined
-  const home = (win ? await $.env.get('USERPROFILE').catch(() => undefined) : await $.env.get('HOME').catch(() => undefined))?.replace(/[\\/]+$/, '')
+  const home = await homeDir($, win)
   if (!home) return undefined
   const sep = win ? '\\' : '/'
   const at = (...names: string[]) => [home, ...names].join(sep)
@@ -176,20 +182,19 @@ async function readText($: EngineInterface, path: string): Promise<string | unde
   })
 }
 
-// RTK at the pinned version that answers `rtk gain`: on the PATH, or in the bin folder.
-async function hasRtk($: EngineInterface, path: string): Promise<boolean> {
-  for (const bin of ['rtk', path]) {
-    const v = await run($, [bin, '--version'], RUN_MS)
-    if (v?.exitCode === 0 && /^rtk (\S+)/.exec(v.stdout.trim())?.[1] === RTK.version.slice(1) && (await run($, [bin, 'gain'], RUN_MS))?.exitCode === 0) return true
-  }
-  return false
+// RTK at the pinned version that answers `rtk gain`, on the PATH or in the bin folder: its name or path.
+async function hasRtk($: EngineInterface, p: Place, path: string): Promise<string | undefined> {
+  const { bin } = await firstBin($, [...bare('rtk', p.win), path], RTK_VERSION, RUN_MS)
+  return bin !== undefined && (await run($, [bin, 'gain'], RUN_MS))?.exitCode === 0 ? bin : undefined
 }
 
-// Downloads the pinned build, checks its SHA-256 before it unpacks, and puts the binary in the bin folder.
-async function installRtk($: EngineInterface, p: Place): Promise<End | undefined> {
+// Downloads the pinned build, checks its SHA-256 before it unpacks, and puts the binary in the bin
+// folder. Returns how RTK runs (its name or full path), or why not.
+async function installRtk($: EngineInterface, p: Place): Promise<string | End> {
   const exe = p.win ? 'rtk.exe' : 'rtk'
   const path = `${p.bin}${p.sep}${exe}`
-  if (await hasRtk($, path)) return undefined
+  const had = await hasRtk($, p, path)
+  if (had !== undefined) return had
   const asset = p.key === undefined ? undefined : RTK.assets[p.key]
   if (!asset) return { reason: 'no RTK build for this machine', text: `Setup stopped: RTK ${RTK.version} has no build for this machine (${p.key ?? 'unknown'}). Company made no changes.` }
   const archive = `${p.dl}${p.sep}${asset.name}`
@@ -205,8 +210,7 @@ async function installRtk($: EngineInterface, p: Place): Promise<End | undefined
   } finally {
     await run($, deleteArgv(p.dl, p.win ? 'windows' : undefined), RUN_MS)
   }
-  if (!(await hasRtk($, path))) return { reason: 'RTK does not start', text: `Setup stopped: RTK in ${p.bin} does not start. Company changed no settings. ${AGAIN}` }
-  return undefined
+  return (await hasRtk($, p, path)) ?? { reason: 'RTK does not start', text: `Setup stopped: RTK in ${p.bin} does not start. Company changed no settings. ${AGAIN}` }
 }
 
 // The file's SHA-256 in hex, read in ranges the engine allows.
@@ -224,22 +228,21 @@ export async function digestHex(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-async function hasGraphify($: EngineInterface, path: string): Promise<boolean> {
-  for (const bin of ['graphify', path]) {
-    const v = await run($, [bin, '--version'], RUN_MS)
-    if (v?.exitCode === 0 && /^graphify (\S+)/.exec(v.stdout.trim())?.[1] === GRAPHIFY_VERSION) return true
-  }
-  return false
+// graphify at the pinned version, on the PATH or where uv, pipx or pip put it: its name or path.
+async function hasGraphify($: EngineInterface, p: Place): Promise<string | undefined> {
+  return (await firstBin($, bare('graphify', p.win), GRAPHIFY_RE, RUN_MS)).bin ?? (await firstBin($, await graphifyPaths($, p.win), GRAPHIFY_RE, RUN_MS)).bin
 }
 
-// uv, else pipx, else pip for Python 3.11 or newer; else the steps.
-async function installGraphify($: EngineInterface, p: Place): Promise<End | undefined> {
-  const path = `${p.bin}${p.sep}${p.win ? 'graphify.exe' : 'graphify'}`
-  if (await hasGraphify($, path)) return undefined
+// uv, else pipx, else pip for Python 3.11 or newer; else the steps. Returns how graphify runs, or why not.
+async function installGraphify($: EngineInterface, p: Place): Promise<string | End> {
+  const had = await hasGraphify($, p)
+  if (had !== undefined) return had
   const py = p.win ? 'python' : 'python3'
   for (const argv of [['uv', 'tool', 'install', GRAPHIFY], ['pipx', 'install', GRAPHIFY], [py, '-m', 'pip', 'install', '--user', GRAPHIFY]]) {
     if (argv[0] === py && !(Number(/^Python 3\.(\d+)/.exec((await run($, [py, '--version'], RUN_MS))?.stdout.trim() ?? '')?.[1]) >= 11)) continue
-    if ((await run($, argv, PIP_MS))?.exitCode === 0 && (await hasGraphify($, path))) return undefined
+    if ((await run($, argv, PIP_MS))?.exitCode !== 0) continue
+    const bin = await hasGraphify($, p)
+    if (bin !== undefined) return bin
   }
   return {
     reason: 'graphify not installed',

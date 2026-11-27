@@ -24,7 +24,10 @@ type World = {
   onPath?: boolean
   curl?: boolean
   graphify?: 'present' | 'uv' | 'pipx' | 'pip' | 'none'
+  // graphify answers only by this full path, not on the PATH.
+  graphifyAt?: string
   python?: string
+  pipScripts?: string
   check?: (cmd: string) => Verdict
   store?: Record<string, unknown> | 'broken'
 }
@@ -92,7 +95,10 @@ function world(on: On, o: World = {}) {
     const [cmd = '', a1 = ''] = argv
     const name = cmd.split(/[\\/]/).pop()!
     if (name === 'rtk' || name === 'rtk.exe') return !rtk || (cmd === name && o.onPath === false) ? ENOENT(cmd) : a1 === '--version' ? res('rtk 1.2.1\n') : res('{}')
-    if (name === 'graphify' || name === 'graphify.exe') return graphify ? res('graphify 0.9.120\n') : ENOENT(cmd)
+    if (name === 'graphify' || name === 'graphify.exe') return graphify && (o.graphifyAt === undefined || cmd === o.graphifyAt) ? res('graphify 0.9.120\n') : ENOENT(cmd)
+    // uv's tool bin folder, and pip's --user scripts folder (`python -c`).
+    if (cmd === 'uv' && a1 === 'tool' && argv[2] === 'dir') return o.graphify === 'uv' ? res(`${BIN}\n`) : ENOENT(cmd)
+    if ((cmd === 'python3' || cmd === 'python') && a1 === '-c') return o.python ? res(`${o.pipScripts ?? BIN}\n`) : ENOENT(cmd)
     if (cmd === 'curl') {
       if (o.curl === false) return res('', 6)
       files[argv[argv.indexOf('-o') + 1]!] = 'not the pinned archive'
@@ -143,6 +149,8 @@ test('Yes: one box at start, rules for allowed originals only, Company first, a 
   expect(w.held.setup).toEqual({ state: 'done' })
   expect(w.notices.length).toBe(1)
   expect(w.notices[0]).toContain('Setup is done.')
+  // Both on the PATH: no word about it.
+  expect(w.notices[0]).not.toContain('PATH')
   // Both were present at the right version: nothing was downloaded or installed.
   expect(w.ran('curl').length + w.ran('uv').length + w.ran('pipx').length).toBe(0)
   // A later session never asks again.
@@ -303,9 +311,9 @@ test('graphify: uv missing, so pipx; pip only with Python 3.11 or newer; else th
   const w = world(on, { rtk: true, graphify: 'pipx', files: { [SETTINGS]: '{}' } })
   await $.session.start({ ...START })
   await settle()
-  expect(w.ran('uv')).toEqual([['uv', 'tool', 'install', 'graphifyy==0.9.120']])
+  expect(w.ran('uv').filter((a) => a[2] === 'install')).toEqual([['uv', 'tool', 'install', 'graphifyy==0.9.120']])
   expect(w.ran('pipx')).toEqual([['pipx', 'install', 'graphifyy==0.9.120']])
-  expect(w.ran('python3')).toEqual([])
+  expect(w.ran('python3').filter((a) => a[1] !== '-c')).toEqual([])
   expect(w.held.setup).toEqual({ state: 'done' })
 })
 
@@ -313,7 +321,7 @@ test('graphify with no uv, no pipx and Python 3.10: the steps, settings still me
   const w = world(on, { rtk: true, graphify: 'none', python: 'Python 3.10.12', files: { [SETTINGS]: '{}' } })
   await $.session.start({ ...START })
   await settle()
-  expect(w.ran('python3')).toEqual([['python3', '--version']])
+  expect(w.ran('python3').filter((a) => a[1] !== '-c')).toEqual([['python3', '--version']])
   expect(w.notices.length).toBe(1)
   expect(w.notices[0]).toContain('Company cannot install graphify. It needs uv, pipx or Python 3.11. Install uv, then run: uv tool install graphifyy==0.9.120')
   expect(JSON.parse(w.files[SETTINGS]!).prependPlugins).toEqual([COMPANY])
@@ -328,6 +336,15 @@ test('RTK in the bin folder but not on the PATH: no download, and the notice say
   expect(w.ran('curl')).toEqual([])
   expect(w.notices[0]).toContain(`Add ${BIN} to your PATH. Then start a new session.`)
   expect(w.held.setup).toEqual({ state: 'done' })
+})
+
+test('graphify by pip into a scripts folder off the PATH, RTK off it too: done, and the notice names both folders once', async ($, on) => {
+  const scripts = '/home/me/.pyuser/bin'
+  const w = world(on, { rtk: true, onPath: false, graphify: 'pip', python: 'Python 3.12.1', pipScripts: scripts, graphifyAt: `${scripts}/graphify`, files: { [SETTINGS]: '{}' } })
+  await $.session.start({ ...START })
+  await settle()
+  expect(w.held.setup).toEqual({ state: 'done' })
+  expect(w.notices[0]).toContain(`Add ${BIN} and ${scripts} to your PATH. Then start a new session.`)
 })
 
 test('an older backup stays; no settings file gets a new one with no backup', async ($, on) => {

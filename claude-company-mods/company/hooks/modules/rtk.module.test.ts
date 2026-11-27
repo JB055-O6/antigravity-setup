@@ -264,6 +264,59 @@ test('on Windows the probe also tries rtk.exe, and the rewrite runs it', async (
   expect(r.runs).toContainEqual(['rtk.exe', 'rewrite', '--', 'git status'])
 })
 
+for (const [where, platform, env, path] of [
+  ['in ~/.local/bin', 'linux', { HOME: '/home/me' }, '/home/me/.local/bin/rtk'],
+  ['on Windows in %USERPROFILE%\\.local\\bin', 'windows', { USERPROFILE: 'C:\\Users\\me' }, 'C:\\Users\\me\\.local\\bin\\rtk.exe'],
+] as const) {
+  test(`RTK not on the PATH but ${where}: rtk is on, and every later call runs it by that path`, async ($, on) => {
+    quiet(on, env)
+    on('session.info', () => ({ value: { transcriptPath: '', platform } }))
+    const read = state(on)
+    const r = rtk(on, { bin: path })
+    perms(on)
+    const seen = bash(on)
+    await $.session.start({ ...START })
+    await $.tool.call({ tool: 'Bash', command: 'git status' })
+    expect(seen).toEqual(['rtk git status'])
+    expect(r.runs).toContainEqual([path, 'rewrite', '--', 'git status'])
+    expect(r.runs.filter((a) => a[1] !== '--version').every((a) => a[0] === path)).toBe(true)
+    await $.session.end({ ...END })
+    expect(read('health').rtk).toMatchObject({ on: true, fails: 0 })
+  })
+}
+
+test('RTK on no PATH and not in ~/.local/bin: off as not installed', async ($, on) => {
+  quiet(on, { HOME: '/home/me' })
+  const read = state(on)
+  const r = rtk(on, { version: null })
+  perms(on)
+  bash(on)
+  await $.session.start({ ...START })
+  expect(r.runs).toEqual([['rtk', '--version'], ['/home/me/.local/bin/rtk', '--version']])
+  await $.session.end({ ...END })
+  expect(read('health').rtk).toMatchObject({ on: false, off: 'not installed', fails: 0 })
+})
+
+test('the Bash tool cannot find rtk: the command runs again as typed, and rtk rests', async ($, on) => {
+  quiet(on)
+  const read = state(on)
+  rtk(on)
+  perms(on)
+  const seen: string[] = []
+  const gone = 'Exit code 127\n/bin/bash: line 1: rtk: command not found'
+  on('tool.call', { tool: 'Bash' }, (_, e) => {
+    seen.push(e.command)
+    return (e.command.startsWith('rtk ') ? { isError: true, result: gone, text: gone } : { result: { stdout: 'ok\n', stderr: '', interrupted: false } }) as never
+  })
+  await $.session.start({ ...START })
+  const out = await $.tool.call({ tool: 'Bash', command: 'git status' })
+  await $.tool.call({ tool: 'Bash', command: 'git status' })
+  expect(out).toMatchObject({ result: { stdout: 'ok\n' } })
+  expect(seen).toEqual(['rtk git status', 'git status', 'git status'])
+  await $.session.end({ ...END })
+  expect(read('health').rtk).toMatchObject({ on: false, off: 'not installed', fails: 0 })
+})
+
 // `false` is not a form rtk may run any more (ruling): a read-only form that fails stands in for it.
 test('a rewritten command that fails still ends non-zero', async ($, on) => {
   quiet(on)

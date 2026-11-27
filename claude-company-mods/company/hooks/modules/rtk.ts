@@ -8,6 +8,7 @@ import { acted, beneath, fail, isDeviceTool, isOn, missing, noteOf, ok, saved, s
 import { showStatus } from '../host'
 import { ready, save } from '../persist'
 import { acceptRewrite, inMode, shouldTry } from '../rtkrules'
+import { bare, firstBin, rtkPaths } from '../bins'
 
 type Start = MatchedHook<'session.start', {}>
 type Bash = MatchedHook<'tool.call', { readonly tool: 'Bash' }>
@@ -16,6 +17,9 @@ export type RtkMode = 'light' | 'full'
 // The mode when COMPANY_RTK_MODE does not name one; the benchmark sets it (Task 18).
 export const DEFAULT_MODE: RtkMode = 'light'
 const RUN_MS = 2000
+const VERSION = /^rtk \d/
+// The shell's answer when the Bash tool cannot find rtk: bash, zsh, cmd.
+const NOT_FOUND = /\brtk: (command )?not found|command not found: rtk|'rtk' is not recognized/
 // rtk reads a repo's own filters only after `rtk trust`, which company never runs.
 const FILTERS = '.rtk/filters.toml'
 
@@ -66,16 +70,11 @@ async function rtkStart($: EngineInterface, e: Parameters<Start>[1], next: Param
   rt.mode = mode === 'light' || mode === 'full' ? mode : DEFAULT_MODE
   const windows = await $.session.info().then((i) => i.platform === 'windows', () => false)
   // A binary that does not start is missing; one that times out or fails otherwise is a failure.
-  let broke: unknown
-  for (const bin of windows ? ['rtk', 'rtk.exe'] : ['rtk']) {
-    const v = await $.process.run([bin, '--version'], { timeoutMs: RUN_MS }).catch((err: unknown) => {
-      if (!missing(err)) broke ??= err
-    })
-    if (v && v.exitCode === 0 && /^rtk \d/.test(v.stdout)) {
-      rt.bin = bin
-      break
-    }
-  }
+  // Not on the PATH: the full path where setup puts it, used for every later call.
+  const onPath = await firstBin($, bare('rtk', windows), VERSION, RUN_MS)
+  const found = onPath.bin !== undefined ? onPath : await firstBin($, await rtkPaths($, windows), VERSION, RUN_MS)
+  const broke = onPath.broke ?? found.broke
+  rt.bin = found.bin
   if (rt.bin === undefined) {
     // rtk stays on with no binary, so it rests this session; the error shows in its health.
     if (broke !== undefined) fail(ctx, broke)
@@ -106,6 +105,13 @@ async function rtkCall($: EngineInterface, e: Parameters<Bash>[1], next: Paramet
   }
   if (cmd === null) return next(e)
   const r = await next({ ...e, command: cmd })
+  // A rewrite runs rtk by its name in the Bash tool, whose PATH may lack the folder the probe found
+  // it in: rtk rests, and the command runs again as typed (every rewrite is a read-only form).
+  if (r.isError && NOT_FOUND.test(String(r.text ?? r.result))) {
+    setOff(ctx, 'not installed')
+    noteOf(ctx, 'off: the Bash tool cannot find rtk on its PATH')
+    return next(e)
+  }
   acted(ctx)
   rt.unread = true
   if (!rt.gainRead && rt.bin !== undefined) {

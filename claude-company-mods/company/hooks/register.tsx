@@ -87,8 +87,7 @@ export const register: Register = (on, options) => {
 
   on('session.attach', async ($, e, next) => {
     await ready($, st)
-    // A client that attaches is a surface beside this process's own terminal: a device.
-    st.deviceAttached = true
+    // An app that attaches only draws the session; a device it brings shows in the tool pool.
     await readPlace($, st)
     // A cloud session gets its screen after it starts: open the pane when a desktop app attaches.
     if (e.surface === 'desktop') void $.ui.open({ id: PANE_ID, title: 'Company' }).then((o) => { st.paneShown = o.isPlaced }).catch(() => {})

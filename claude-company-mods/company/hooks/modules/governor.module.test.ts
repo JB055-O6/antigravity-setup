@@ -1,6 +1,8 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { EMPTY_PANEL } from '../panel'
+import { createShared, type Ctx } from '../core'
+import { MODULE_META } from '.'
+import { registerGovernor } from './governor'
 
 // The engine beneath the plugin: records each step that reached it.
 function stepSink(on: On) {
@@ -34,20 +36,18 @@ test('subagent Opus low goes to medium', async ($, on) => {
 
 test('a bookkeeping throw after a Fable reroute keeps the reroute', async ($, on) => {
   mock.store(on)
-  const statuses: Array<string | undefined> = []
-  on('ui.status', (_, e) => {
-    statuses.push(e.text)
-    return { value: undefined }
-  })
-  // A stored pane whose log is no list: the first note and status after it throw.
-  on('state.get', (_, e, next) =>
-    e.plugin === 'company' && e.key === 'panel'
-      ? { value: { value: { shape: 'panel-2', value: { ...EMPTY_PANEL, log: { length: 1 } } }, version: 1 } }
-      : next(e),
-  )
+  on('ui.status', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  // The plugin's own governor is off; this copy runs beneath it with a ledger that refuses writes.
+  mock.env(on, { COMPANY_OFF: 'governor' })
+  const ctx: Ctx = { id: 'governor', caps: {}, shared: createShared(MODULE_META.map((m) => m.id)) }
+  ctx.shared.ledger.governor = Object.freeze({ added: 0, saved: 0, acted: 0 })
+  registerGovernor(on, ctx)
   const got = stepSink(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await step($, { agentId: 'x1', model: 'fable', effort: 'high' })
   expect(got[0]).toEqual({ agentId: 'x1', model: 'opus', effort: 'max' })
-  // The status path threw before it posted a line.
-  expect(statuses).toEqual([])
+  // The count threw before the note; the throw is not the module's failure.
+  expect(ctx.shared.log).toEqual([])
+  expect(ctx.shared.health.governor).toMatchObject({ on: true, fails: 0 })
 })

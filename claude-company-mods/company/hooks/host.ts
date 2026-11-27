@@ -5,7 +5,8 @@ import { EMPTY_PANEL } from './panel'
 import { directiveState, directivesNote } from './directives'
 import { meterLine, nextEconomy, readWindows } from './governor'
 import { CREW } from './crew'
-import { note, type Shared } from './core'
+import { isDeviceTool, note, type Shared } from './core'
+import type { PanelLine } from '../types'
 
 const LABEL: Record<string, string> = { start: 'COMPANY', route: 'ROUTER', governor: 'GOVERNOR', meter: 'METER', diet: 'DIET', crew: 'CREW' }
 
@@ -27,11 +28,18 @@ export async function restorePanel($: EngineInterface, st: Shared): Promise<void
     st.dirs = p.directives
     st.directives = directivesNote(Object.fromEntries(p.directives.filter((d) => d.on).map((d) => [d.name, true])))
   }
-  if (!st.log.length && p.log.length) {
-    st.log = p.log
+  // A stored line of the wrong shape is dropped.
+  const log = Array.isArray(p.log) ? p.log.filter(isLine) : []
+  if (!st.log.length && log.length) {
+    st.log = log
     // Lines already posted as chat notices are not posted again.
-    st.seq = st.shown = Math.max(...p.log.map((l) => l.n))
+    st.seq = st.shown = Math.max(...log.map((l) => l.n))
   }
+}
+
+function isLine(l: unknown): l is PanelLine {
+  const v = l as Partial<PanelLine> | null
+  return typeof v === 'object' && v !== null && Number.isFinite(v.n) && typeof v.kind === 'string' && typeof v.text === 'string'
 }
 
 export function showStatus($: EngineInterface, st: Shared): void {
@@ -109,8 +117,9 @@ export async function boot($: EngineInterface, st: Shared): Promise<void> {
 }
 
 // Where the session runs. Off the person's machine: a cloud session (CLAUDE_CODE_REMOTE), an SSH
-// login (SSH_CONNECTION) or the hosted server (isHosted). A device: a client on the roster that is
-// not this process's own terminal. Each read that fails says nothing.
+// login (SSH_CONNECTION) or the hosted server (isHosted). A device: a tool of the person's computer
+// or browser in the tool pool (an app that only draws the session is no device). A read that fails
+// says nothing. The router's tool.list hook sees a device that joins later.
 // shortcut: a VM with none of these marks reads as on the machine; add its mark when the engine gives one.
 export async function readPlace($: EngineInterface, st: Shared): Promise<void> {
   try {
@@ -123,7 +132,7 @@ export async function readPlace($: EngineInterface, st: Shared): Promise<void> {
     if ((await $.session.info()).isHosted) st.offMachine = true
   } catch {}
   try {
-    if ((await $.session.surfaces()).some((s) => s !== 'terminal')) st.deviceAttached = true
+    if ((await $.tool.list()).some((t) => isDeviceTool(t.name))) st.deviceAttached = true
   } catch {}
 }
 

@@ -5,7 +5,7 @@
 import type { EngineInterface, Hook, MatchedHook, On } from 'claude-code'
 import type { CrewRun } from '../../types'
 import { CREW } from '../crew'
-import { acted, beneath, fail, isOn, note, noteOf, offMachineWithDevice, ok, setOff, type Ctx } from '../core'
+import { acted, beneath, fail, isDeviceTool, isOn, note, noteOf, offMachineWithDevice, ok, setOff, type Ctx } from '../core'
 import { modelFamily } from '../governor'
 import { showStatus } from '../host'
 import { countRoute, ready, save } from '../persist'
@@ -17,6 +17,8 @@ type End = MatchedHook<'session.end', {}>
 type Spawn = Hook<'agent.spawn'>
 type AgentCall = MatchedHook<'tool.call', { readonly tool: 'Agent' }>
 type Report = Hook<'agent.report'>
+type List = Hook<'tool.list'>
+type Step = MatchedHook<'turn.step', {}>
 
 export function registerRouter(on: On, ctx: Ctx): void {
   on('session.start', {}, async ($, e, next) => {
@@ -49,12 +51,31 @@ export function registerRouter(on: On, ctx: Ctx): void {
     if (!isOn(ctx)) return next(e)
     try { const r = await routerEnd($, e, beneath(next), ctx); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
   })
-  // Not a guard: this hook acts only while the router is off for a device. It hides the crew
-  // that was registered before the device came.
+  // The engine raises it again when the tool names change: a device that joins later shows here.
+  on('tool.list', async ($, e, next) => {
+    await ready($, ctx.shared)
+    if (!isOn(ctx)) return next(e)
+    try { const r = await routerList($, e, beneath(next), ctx); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
+  })
+  // Beside the governor's: COMPANY_OFF=governor keeps the routed effort.
+  on('turn.step', {}, async function* ($, e, next) {
+    await ready($, ctx.shared)
+    if (!isOn(ctx)) return yield* next(e)
+    try { const r = yield* routerStep($, e, beneath(next), ctx); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }
+  })
+  // No isOn pass-through: this hook acts only while the router is off for a device. It hides
+  // the crew that was registered before the device came.
   on('agent.offer', async ($, e, next) => {
     await ready($, ctx.shared)
-    if (ctx.shared.health[ctx.id].off === 'device attached' && CREW_NAMES.some((n) => e.agent === `company:${n}`)) return { isOffered: false }
-    return next(e)
+    try {
+      const hide = ctx.shared.health[ctx.id].off === 'device attached' && CREW_NAMES.some((n) => e.agent === `company:${n}`)
+      const r = hide ? { isOffered: false } : await beneath(next)(e)
+      ok(ctx)
+      return r
+    } catch (err) {
+      fail(ctx, err)
+      throw err
+    }
   })
 }
 
@@ -99,6 +120,34 @@ async function routerStart($: EngineInterface, e: Parameters<Start>[1], next: Pa
 async function routerAttach($: EngineInterface, e: Parameters<Attach>[1], next: Parameters<Attach>[2], ctx: Ctx) {
   stepAside($, ctx)
   return next(e)
+}
+
+// Observe only: the pool goes on as it came.
+async function routerList($: EngineInterface, e: Parameters<List>[1], next: Parameters<List>[2], ctx: Ctx) {
+  const r = await next(e)
+  if (r.value?.some((t) => isDeviceTool(t.name))) {
+    ctx.shared.deviceAttached = true
+    stepAside($, ctx)
+  }
+  return r
+}
+
+// A routed subagent steps with its routed effort; the governor beneath may still lower it.
+// `next` is called and pulled last, so no path closes the stream before it is read.
+async function* routerStep($: EngineInterface, e: Parameters<Step>[1], next: Parameters<Step>[2], ctx: Ctx) {
+  const st = ctx.shared
+  const want = e.agentId ? (st.efforts.get(e.agentId) as Route['effort'] | undefined) : undefined
+  const out = want && want !== e.effort ? { ...e, effort: want } : e
+  try {
+    const run = e.agentId ? st.runs.find((r) => r.id === e.agentId) : undefined
+    if (run) {
+      run.steps += 1
+      if (run.steps % 3 === 1) showStatus($, st)
+    }
+  } catch {
+    // Bookkeeping only.
+  }
+  return yield* next(out)
 }
 
 async function routerSpawn($: EngineInterface, e: Parameters<Spawn>[1], next: Parameters<Spawn>[2], ctx: Ctx) {

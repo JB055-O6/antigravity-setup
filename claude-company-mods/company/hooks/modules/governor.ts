@@ -1,19 +1,19 @@
-// Governor: on each model request, the router's effort for a routed subagent, Fable to Opus for a
-// subagent, then the effort rules. The main loop's model is never changed and its effort never raised.
-import type { EngineInterface, Hook, On } from 'claude-code'
+// Governor: on each model request, Fable to Opus for a subagent, then the effort rules. The
+// main loop's model is never changed and its effort never raised. The router's hook above has
+// already put a routed subagent's effort on the step.
+import type { EngineInterface, MatchedHook, On } from 'claude-code'
 import { acted, beneath, fail, isOn, note, ok, type Ctx, type Shared } from '../core'
 import { governEffort, modelFamily } from '../governor'
 import { showStatus } from '../host'
 import { ready, save } from '../persist'
-import type { Route } from '../router'
 
-type Step = Hook<'turn.step'>
+type Step = MatchedHook<'turn.step', {}>
 
 // Sessions already told that the main model is Fable.
 const fableWarned = new WeakSet<Shared>()
 
 export function registerGovernor(on: On, ctx: Ctx): void {
-  on('turn.step', async function* ($, e, next) {
+  on('turn.step', {}, async function* ($, e, next) {
     // Once per load (a reload may start here); later steps read memory only.
     await ready($, ctx.shared)
     if (!isOn(ctx)) return yield* next(e)
@@ -29,9 +29,6 @@ async function* governStep($: EngineInterface, e: Parameters<Step>[1], next: Par
   let effort: typeof e.effort = e.effort
   let rerouted = false
   if (e.agentId) {
-    // The router's remembered subagent effort first.
-    const want = st.efforts.get(e.agentId) as Route['effort'] | undefined
-    if (want && want !== e.effort) effort = want
     // Fable bills usage credits, not the Pro limits: a subagent's Fable step goes to
     // Opus max (the governor lowers it to xhigh in economy). Never the main loop.
     if (modelFamily(model) === 'fable') {
@@ -56,11 +53,6 @@ async function* governStep($: EngineInterface, e: Parameters<Step>[1], next: Par
     if (g.changed) acted(ctx)
     // The count is in the ledger; the write never holds up the step.
     if (rerouted || g.changed) void save($, st)
-    const run = e.agentId ? st.runs.find((r) => r.id === e.agentId) : undefined
-    if (run) {
-      run.steps += 1
-      if (run.steps % 3 === 1) showStatus($, st)
-    }
     // Log a fix once per kind, not on every step.
     const why = rerouted ? 'subagent Fable → Opus (no usage credits)' : g.changed ? g.reason : undefined
     if (why && why !== st.lastGov) {

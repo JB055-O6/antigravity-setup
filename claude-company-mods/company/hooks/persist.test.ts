@@ -166,6 +166,29 @@ test('a failing store never blocks a spawn', async ($, on) => {
   expect(await $.session.end({ ...END })).toEqual({ sessionId: 's1' })
 })
 
+test('a stored log line of the wrong shape is dropped on restore', async ($, on) => {
+  engine(on)
+  store(on)
+  stepSink(on)
+  const held = state(on, {
+    panel: {
+      value: {
+        shape: 'panel-2',
+        value: {
+          version: '0.11.0', crew: 5, crewTotal: 5, roster: [], directives: [], economy: false, routed: 0, governed: 0, diet: 0,
+          log: [{ n: 3, kind: 'start', text: 'company 0.11.0 on' }, 'junk', { n: 'x', kind: 'route', text: 'bad' }, null, { n: 9, kind: 'diet' }],
+          runs: [],
+        },
+      },
+      version: 2,
+    },
+  })
+  // A hot reload: the first event is a step the governor fixes, which writes the pane.
+  for await (const _ of $.turn.step({ turnId: 't', index: 0, model: 'sonnet', effort: 'max', messageCount: 1 })) void _
+  const pane = (held.panel!.value as { value: { log: Array<{ n: number; kind: string }> } }).value
+  expect(pane.log.map((l) => [l.n, l.kind])).toEqual([[3, 'start'], [4, 'governor']])
+})
+
 test('a step that comes first after a reload is governed from stored economy and keeps the pane', async ($, on) => {
   const { statuses } = engine(on)
   store(on, { meter: { sessionId: 's1', economy: true, economySince: 1000, lastFiveHour: 88, lastWeek: 40 } })

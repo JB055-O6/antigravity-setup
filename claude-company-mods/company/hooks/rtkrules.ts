@@ -49,18 +49,20 @@ export const FORMS: readonly Form[] = [
       shortValue: 'n',
       numeric: true,
       long: ['--oneline', '--stat', '--shortstat', '--name-only', '--name-status', '--graph', '--decorate', '--no-merges', '--'],
-      longValue: ['--format', '--since', '--until', '--author', '--grep'],
-      eqOnly: ['--pretty'],
+      longValue: ['--since', '--until', '--author', '--grep'],
+      // git takes these values only after `=`.
+      eqOnly: ['--pretty', '--format'],
       values: { '-n': DIGITS },
     },
   },
   { words: ['git', 'diff'], flags: { long: ['--stat', '--shortstat', '--name-only', '--name-status', '--cached', '--staged', '--'] } },
-  { words: ['git', 'show'], flags: { short: 's', long: ['--stat', '--name-only', '--name-status', '--oneline', '--no-patch', '--'], longValue: ['--format'] } },
+  { words: ['git', 'show'], flags: { short: 's', long: ['--stat', '--name-only', '--name-status', '--oneline', '--no-patch', '--'], eqOnly: ['--format'] } },
   { words: ['git', 'blame'], flags: { short: 'ws', shortValue: 'L', long: ['--'] } },
   // List only: a word that is no flag names a branch to make.
   { words: ['git', 'branch'], flags: { short: 'arvl', long: ['--all', '--remotes', '--list', '--show-current', '--verbose', '--no-color'], operands: false } },
   { words: ['ls'], flags: { short: 'laAhRtrS1dF', long: ['--'] } },
-  { words: ['tree'], flags: { short: 'adf', shortValue: 'LI', long: ['--noreport'], values: { '-L': DIGITS } } },
+  // No tree: it reads every letter of a bundle, and -I, -L and -o each take the next word, so
+  // `tree -Io x out.txt` writes out.txt. A parser of its own is not worth the risk.
   { words: ['find'], flags: { find: true, longValue: ['-name', '-iname', '-path', '-type', '-maxdepth', '-mindepth', '-newer', '-size', '-mtime'] } },
   { words: ['wc'], flags: { short: 'lwcmL', long: ['--'] } },
   {

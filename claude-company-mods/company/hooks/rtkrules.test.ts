@@ -100,7 +100,7 @@ test('acceptRewrite: a leading dash in the arguments keeps the check whole', () 
 test('inMode: light takes the read-only forms, full adds more read-only forms', () => {
   for (const c of [
     'rtk git status', 'cd x && rtk git log -5', 'rtk git diff --stat', 'rtk git show HEAD', 'rtk git blame a.ts', 'rtk git branch',
-    'rtk git branch -a', 'rtk ls -la', 'rtk tree -L 2', 'rtk tree -a', 'rtk find . -name "*.ts" -type f', 'rtk wc -l a', 'rtk grep -rn foo .',
+    'rtk git branch -a', 'rtk ls -la', 'rtk git show --format=%h HEAD', 'rtk find . -name "*.ts" -type f', 'rtk wc -l a', 'rtk grep -rn foo .',
     'rtk rg -n "a|b" src', "rtk ls 'a b*'", 'rtk git branch 2>/dev/null', 'rtk docker ps', 'rtk docker images', 'rtk docker logs x', 'rtk kubectl get pods', 'rtk kubectl describe pod x',
     'rtk kubectl logs x', 'rtk git status; false', 'rtk git log -5 || true', 'rtk git status 2>&1', 'rtk ls 2>/dev/null', 'rtk git diff >/dev/null',
     "rtk git log --format='%h $s'", 'rtk git log --oneline -n 5 --author=me --since "2 weeks" -- src', 'rtk git log -n5 --pretty=oneline',
@@ -119,7 +119,7 @@ test('inMode: light takes the read-only forms, full adds more read-only forms', 
   for (const c of [
     'rtk pytest -q', 'rtk cargo test', 'rtk go test ./...', 'rtk jest', 'rtk read README.md', 'rtk cat a', 'rtk head -5 a', 'rtk cd x && rtk ls', 'rtk gitx',
     'rtk git-foo', 'rtk gh pr list', 'rtk docker compose ps', 'rtk du -sh .', 'rtk df -h', 'rtk jq . a.json', 'rtk pip list', 'rtk helm list',
-    'rtk find . \\( -name a -o -name b \\)',
+    'rtk find . \\( -name a -o -name b \\)', 'rtk tree -L 2', 'rtk tree -a', 'rtk git log --format %h', 'rtk git show --format %h HEAD',
   ]) {
     expect([c, inMode(c, 'light'), inMode(c, 'full')]).toEqual([c, false, false])
   }
@@ -150,6 +150,10 @@ const FORBIDDEN = [
   // A value that is the tool's option, not the flag's value: optional values only as `--x=v`.
   'git log --pretty --output=x', 'git log -n --output=x', 'git log --format --output=x', 'git log --stat=1 --output=x',
   'kubectl get pods -o jsonpath={.x}', 'kubectl get pods -o=json', 'git log -nx', 'tree -L x', 'docker logs --tail all x',
+  // Review round 3: tree reads every letter of a bundle and -I, -L, -o take the next word. tree is never rewritten.
+  'tree -Io x out.txt', 'tree -IR x -L 1 .', 'tree -L 1', 'tree',
+  // git takes --format and --pretty values only after `=`: a next word is git's own.
+  'git log --format %h --output=x', 'git show --format %h --output=x HEAD',
 ] as const
 
 // Each form refuses a flag that is not on its own list, long and short.

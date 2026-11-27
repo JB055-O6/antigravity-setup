@@ -15,8 +15,11 @@ const GRAPH = '/repo/graphify-out/graph.json'
 const FEWER =
   '[graphify] WARNING: new graph has 5 nodes but existing graph.json has 9. Refusing to overwrite — you may be missing chunk files from a previous session. Pass --force to override.\n'
 const SEMANTIC = '[graphify] WARNING: Refusing to overwrite — saved semantic node(s) are missing from the new graph: a, b.\n'
-type Run = { exitCode: number; stdout?: string; stderr?: string }
-type World = { git?: boolean; top?: Run; tracked?: string; graphify?: boolean; update?: () => Run | Promise<Run>; files?: Record<string, string>; links?: string[]; procs?: number[]; env?: Record<string, string> }
+const NOTHING = 'Nothing to update or rebuild failed — check output above.\n'
+const UNREAD = `error: Cannot read ${GRAPH} for incremental merge: Expecting value: line 2 column 1 (char 12). Delete the file and run a full rebuild.\n${NOTHING}`
+// `same`: graphify found no node or edge to change, so graph.json stays as it is.
+type Run = { exitCode: number; stdout?: string; stderr?: string; same?: boolean }
+type World = { git?: boolean; badWrite?: string; top?: Run; tracked?: string; graphify?: boolean; update?: () => Run | Promise<Run>; files?: Record<string, string>; links?: string[]; procs?: number[]; env?: Record<string, string> }
 
 // The plugin's own graph runs. The hooks here stand for the engine beneath it: git, graphify,
 // files, clock, notices, and $.state (read after session.end writes health and the ledger).
@@ -24,7 +27,9 @@ function world(on: On, o: World = {}) {
   mock.store(on)
   mock.env(on, o.env ?? {})
   mock.clock(on, { now: T0 })
-  on('ui.status', () => ({ value: undefined }))
+  // The status line redraws after each graph run, an empty one too.
+  let status = 0
+  on('ui.status', () => (status++, { value: undefined }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.end', (_, e) => ({ sessionId: e.sessionId }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
@@ -43,6 +48,9 @@ function world(on: On, o: World = {}) {
   })
   const read = (key: 'health' | 'ledger') => (held[key]?.value as { value: any } | undefined)?.value
   const files: Record<string, string> = { ...o.files }
+  // Each write gives the file a newer time.
+  const times: Record<string, number> = {}
+  let tick = T0
   const links = new Set(o.links)
   const procs = o.procs ?? []
   const runs: { cmd: string; env?: Readonly<Record<string, string>> }[] = []
@@ -55,8 +63,11 @@ function world(on: On, o: World = {}) {
     if (cmd === 'git rev-parse --git-path info/exclude') return res({ exitCode: 0, stdout: '.git/info/exclude\n' })
     if (o.graphify !== false && cmd === 'graphify --version') return res({ exitCode: 0, stdout: 'graphify 0.9.120\n' })
     if (o.graphify !== false && cmd === 'graphify update /repo') {
-      const r = await (o.update ?? (() => ({ exitCode: 0 })))()
-      if (r.exitCode === 0) files[GRAPH] = '{"nodes":[]}'
+      const r: Run = await (o.update ?? (() => ({ exitCode: 0 })))()
+      if (r.exitCode === 0 && !r.same) {
+        files[GRAPH] = '{"nodes":[]}'
+        times[GRAPH] = ++tick
+      }
       return res(r)
     }
     return { deny: `spawn ${e.argv[0]} ENOENT` } as never
@@ -74,13 +85,15 @@ function world(on: On, o: World = {}) {
   }
   on('fs.stat', (_, e) => {
     if (links.has(e.path)) return { value: { kind: 'other', size: 0, mtimeMs: 0, isLink: true } }
-    if (e.path in files) return { value: { kind: 'file', size: files[e.path]!.length, mtimeMs: T0, isLink: false } }
+    if (e.path in files) return { value: { kind: 'file', size: files[e.path]!.length, mtimeMs: times[e.path] ?? T0, isLink: false } }
     return under(e.path).length ? { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } } : enoent(e.path)
   })
   on('fs.read', (_, e) => (e.path in files ? { value: files[e.path]! } : enoent(e.path)))
   const writes: string[] = []
   on('fs.write', (_, e) => {
+    if (e.path === o.badWrite) return { deny: `open ${e.path} failed: EACCES` } as never
     files[e.path] = e.text
+    times[e.path] = ++tick
     writes.push(e.path)
     return { value: undefined }
   })
@@ -90,7 +103,7 @@ function world(on: On, o: World = {}) {
   }))
   const mine = () => runs.filter((r) => r.cmd.startsWith('git ') || r.cmd.startsWith('graphify '))
   const updates = () => runs.filter((r) => r.cmd.startsWith('graphify update')).length
-  return { files, writes, runs, procs, notices, read, mine, updates }
+  return { files, writes, runs, procs, notices, read, mine, updates, status: () => status }
 }
 
 // Lets the run a hook started and left (never awaited) go on.
@@ -201,6 +214,8 @@ test('graph: the first build runs at session start, detached, LLM-free, under th
   expect(up.map((r) => r.cmd)).toEqual(['graphify update /repo'])
   expect(up[0]!.env).toMatchObject({
     GRAPHIFY_BACKEND: 'none', ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '', AWS_PROFILE: '', OLLAMA_HOST: '', GRAPHIFY_FORCE: '', GRAPHIFY_OUT: '',
+    // graphify rewrites its skill copies under the home and working folders unless this is set.
+    GRAPHIFY_NO_AUTO_REFRESH: '1',
   })
   expect(w.files[EXCLUDE]).toBe('# user\n*.o\ngraphify-out/\n')
   // The lock named this process while the run went on, and is free after it.
@@ -215,28 +230,110 @@ test('graph: the first build runs at session start, detached, LLM-free, under th
   expect(w.writes.filter((p) => p === EXCLUDE)).toHaveLength(1)
 })
 
-test('graph: a graph with more nodes stays (graphify refuses the smaller one): kept, not a failure, never --force', async ($, on) => {
-  const answers: Run[] = [{ exitCode: 1, stderr: FEWER }, { exitCode: 1, stderr: SEMANTIC }, { exitCode: 2, stderr: 'Traceback\nValueError: bad\n' }]
-  const w = world(on, { files: { [GRAPH]: '{"nodes":[1,2,3,4,5,6,7,8,9]}' }, update: () => answers.shift()! })
+test('graph: a graph with more nodes stays (graphify refuses the smaller one): kept, one notice, no more runs this session, never --force', async ($, on) => {
+  const w = world(on, { files: { [GRAPH]: '{"nodes":[1,2,3,4,5,6,7,8,9]}' }, update: () => ({ exitCode: 1, stderr: FEWER + NOTHING }) })
+  await $.session.start({ ...START })
+  await until(() => w.updates() === 1 && w.files[LOCK] === '')
+  await settle()
+  // graphify would redo the same work and refuse again: no run at the next turn ends.
+  for (const s of ['b', 'c']) {
+    await $.tool.call({ tool: 'Edit', file_path: '/repo/a.ts', old_string: 'a', new_string: s })
+    await turn($)
+    await settle()
+  }
+  expect(w.updates()).toBe(1)
+  expect(w.notices.filter((n) => n.startsWith('company · GRAPH · kept:'))).toEqual(['company · GRAPH · kept: graphify keeps the old graph; the new one lacks some of its nodes'])
+  expect(w.files[GRAPH]).toBe('{"nodes":[1,2,3,4,5,6,7,8,9]}')
+  expect(w.runs.some((r) => r.cmd.includes('--force'))).toBe(false)
+  await $.session.end({ ...END })
+  expect(w.read('health').graph).toMatchObject({ on: true, fails: 0 })
+  expect(w.read('ledger')?.graph?.acted ?? 0).toBe(0)
+  // The next session tries once more.
+  await $.session.start({ ...START })
+  await until(() => w.updates() === 2)
+})
+
+test('graph: saved LLM nodes the AST-only run lacks: kept too', async ($, on) => {
+  const w = world(on, { files: { [GRAPH]: '{"nodes":[1]}' }, update: () => ({ exitCode: 1, stderr: SEMANTIC + NOTHING }) })
   await $.session.start({ ...START })
   await until(() => w.updates() === 1 && w.files[LOCK] === '')
   await settle()
   expect(w.notices).toContain('company · GRAPH · kept: graphify keeps the old graph; the new one lacks some of its nodes')
-  expect(w.files[GRAPH]).toBe('{"nodes":[1,2,3,4,5,6,7,8,9]}')
-  // Saved LLM nodes that the new graph lacks: kept too.
+  await $.session.end({ ...END })
+  expect(w.read('health').graph).toMatchObject({ on: true, fails: 0 })
+})
+
+test('graph: an old graph.json graphify cannot read is a failure with a notice, not kept; so is any other exit', async ($, on) => {
+  const answers: Run[] = [{ exitCode: 1, stderr: UNREAD }, { exitCode: 2, stderr: 'Traceback\nValueError: bad\n' }]
+  const w = world(on, { files: { [GRAPH]: '{"nodes": [' }, update: () => answers.shift()! })
+  await $.session.start({ ...START })
+  await until(() => w.updates() === 1 && w.files[LOCK] === '')
+  await settle()
+  expect(w.notices).toContain('company · GRAPH · graphify cannot read graphify-out/graph.json. Delete it to build it again.')
+  expect(w.notices.some((n) => n.includes('kept:'))).toBe(false)
+  // Not kept, so the next turn end with an edit runs again.
   await $.tool.call({ tool: 'Edit', file_path: '/repo/a.ts', old_string: 'a', new_string: 'b' })
   await turn($)
   await until(() => w.updates() === 2 && w.files[LOCK] === '')
   await settle()
-  // Any other refusal is a failure.
-  await $.tool.call({ tool: 'Edit', file_path: '/repo/a.ts', old_string: 'b', new_string: 'c' })
-  await turn($)
-  await until(() => w.updates() === 3 && w.files[LOCK] === '')
+  await $.session.end({ ...END })
+  expect(w.read('health').graph).toMatchObject({ on: true, fails: 2, lastErr: 'Error: graphify update exit 2: ValueError: bad' })
+  expect(w.files[GRAPH]).toBe('{"nodes": [')
+})
+
+test('graph: a repo with no code files is a skip: no failure, no action, no notice', async ($, on) => {
+  const w = world(on, { update: () => ({ exitCode: 1, stdout: '[graphify watch] No code files found - nothing to rebuild.\n', stderr: NOTHING }) })
+  await $.session.start({ ...START })
+  await until(() => w.updates() === 1 && w.files[LOCK] === '')
   await settle()
   await $.session.end({ ...END })
-  expect(w.read('health').graph).toMatchObject({ on: true, fails: 1, lastErr: 'Error: graphify update exit 2: ValueError: bad' })
-  expect(w.files[GRAPH]).toBe('{"nodes":[1,2,3,4,5,6,7,8,9]}')
-  expect(w.runs.some((r) => r.cmd.includes('--force'))).toBe(false)
+  expect(w.read('health').graph).toMatchObject({ on: true, fails: 0 })
+  expect(w.read('ledger')?.graph?.acted ?? 0).toBe(0)
+  expect(w.notices.some((n) => n.includes('GRAPH'))).toBe(false)
+})
+
+test('graph: an update that changes no node or edge is not counted as an action', async ($, on) => {
+  const answers: Run[] = [{ exitCode: 0 }, { exitCode: 0, same: true }]
+  const w = world(on, { update: () => answers.shift()! })
+  await $.session.start({ ...START })
+  await until(() => w.updates() === 1 && w.files[LOCK] === '')
+  await settle()
+  await $.tool.call({ tool: 'Bash', command: 'echo x' })
+  await turn($)
+  await until(() => w.updates() === 2 && w.files[LOCK] === '')
+  await settle()
+  await $.session.end({ ...END })
+  expect(w.read('ledger').graph.acted).toBe(1)
+})
+
+test('graph: a fault while the exclude file is written leaves the graph idle: one failure, no runs', async ($, on) => {
+  const w = world(on, { badWrite: EXCLUDE })
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'touch a' })
+  await settle()
+  // No run starts at the turn end, not even one that stops at once.
+  const drawn = w.status()
+  await turn($)
+  await settle()
+  expect(w.status()).toBe(drawn)
+  expect(w.updates()).toBe(0)
+  await $.session.end({ ...END })
+  expect(w.read('health').graph).toMatchObject({ on: true, fails: 1 })
+  expect(w.read('health').graph.lastErr).toContain('EACCES')
+})
+
+test('graph: a lock another session took over during the run stays when the run ends', async ($, on) => {
+  const other = lockOf(9, T0, 'Linux 6.8.0')
+  const w = world(on, {
+    update: () => {
+      w.files[LOCK] = other
+      return { exitCode: 0 }
+    },
+  })
+  await $.session.start({ ...START })
+  await until(() => w.updates() === 1)
+  await settle()
+  expect(w.files[LOCK]).toBe(other)
 })
 
 test('graph: two turn ends during a run give exactly 2 runs in all; a turn with no file tool runs nothing', async ($, on) => {
@@ -296,12 +393,13 @@ test('graph: a lock older than 15 min is taken over; a fresh one from another ma
   expect(w.updates()).toBe(1)
 })
 
-test('graph status: building, updating, ready, none, or off with its reason', () => {
+test('graph status: building, updating, ready, kept, none, or off with its reason', () => {
   const h = createShared(MODULE_META.map((m) => m.id)).health.graph
   expect(graphStatus(h, { running: true })).toEqual({ state: 'building', reason: undefined, builtAt: undefined, bytes: undefined })
   expect(graphStatus(h, { running: true, builtAt: T0, bytes: 12 }).state).toBe('updating')
   expect(graphStatus(h, { running: false, builtAt: T0, bytes: 12 })).toEqual({ state: 'ready', reason: undefined, builtAt: T0, bytes: 12 })
   expect(graphStatus(h, { running: false }).state).toBe('none')
+  expect(graphStatus(h, { running: false, builtAt: T0, kept: true }).state).toBe('kept')
   expect(graphStatus({ ...h, on: false, off: 'not installed' }, { running: false })).toMatchObject({ state: 'off', reason: 'not installed' })
 })
 

@@ -44,8 +44,9 @@ export type Shared = {
   ownSections: Record<string, number>
   // rtk rewrites left out because the rewritten command would need a prompt or is denied (/company shows it).
   skippedPermission: number
-  // The code graph (graph module): a run going on, graph.json's time, graphify-out's bytes; the dashboard shows them.
-  graph: { running: boolean; builtAt?: number; bytes?: number }
+  // The code graph (graph module): a run going on, graph.json's time, graphify-out's bytes, and
+  // whether graphify kept the old graph (no more updates this session); the dashboard shows them.
+  graph: { running: boolean; builtAt?: number; bytes?: number; kept?: boolean }
   // A tool that can change files (Write, Edit, NotebookEdit, Bash) ran since the main loop's last turn end.
   touched: boolean
 }

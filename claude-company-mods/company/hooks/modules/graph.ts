@@ -26,13 +26,19 @@ const OUT = 'graphify-out'
 const LOCK = '.company.lock'
 // What graphify 0.9.120 reads to pick an LLM backend (graphify.llm.backend_detection_env_vars):
 // all empty, and the backend none. GRAPHIFY_FORCE and GRAPHIFY_OUT empty too: no forced shrink,
-// and the output stays in <root>/graphify-out.
+// and the output stays in <root>/graphify-out. GRAPHIFY_NO_AUTO_REFRESH: graphify rewrites its
+// skill copies in the home and the working folders at each command otherwise.
 const KEYS = [
   'ANTHROPIC_API_KEY', 'MOONSHOT_API_KEY', 'OLLAMA_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY',
   'AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT', 'AWS_PROFILE', 'AWS_REGION', 'AWS_DEFAULT_REGION', 'OLLAMA_BASE_URL', 'OLLAMA_HOST',
   'GRAPHIFY_FORCE', 'GRAPHIFY_OUT',
 ]
-const ENV: Record<string, string> = { ...Object.fromEntries(KEYS.map((k) => [k, ''])), GRAPHIFY_BACKEND: 'none' }
+const ENV: Record<string, string> = { ...Object.fromEntries(KEYS.map((k) => [k, ''])), GRAPHIFY_BACKEND: 'none', GRAPHIFY_NO_AUTO_REFRESH: '1' }
+// graphify 0.9.120's answers that need care (watch.py): a refusal to write a graph that lost nodes
+// (the person's own, maybe with LLM nodes), an old graph.json it cannot read, and no code to graph.
+const KEPT = /new graph has \d+ nodes but existing|saved semantic node\(s\) are missing/
+const UNREAD = /Cannot read .*graph\.json|could not be read to verify/
+const NO_CODE = /No code files found/
 
 // The line for the charter and the diet block (spec 7.2), only when graph.json exists.
 export function graphHint(hasGraph: boolean): string {
@@ -41,11 +47,18 @@ export function graphHint(hasGraph: boolean): string {
     : ''
 }
 
-export type GraphState = 'building' | 'updating' | 'ready' | 'none' | 'off'
-// What the dashboard shows: building (no graph yet), updating, ready, none (no graph and no run),
-// or off with its reason; the time of graph.json and the bytes in graphify-out.
+export type GraphState = 'building' | 'updating' | 'ready' | 'kept' | 'none' | 'off'
+// What the dashboard shows: building (no graph yet), updating, ready, kept (graphify keeps the old
+// graph; no updates this session), none (no graph and no run), or off with its reason; the time
+// of graph.json and the bytes in graphify-out.
 export function graphStatus(h: Health, g: Shared['graph']): { state: GraphState; reason?: OffReason; builtAt?: number; bytes?: number } {
-  const state: GraphState = !h.on ? 'off' : g.running ? (g.builtAt === undefined ? 'building' : 'updating') : g.builtAt === undefined ? 'none' : 'ready'
+  const state: GraphState = !h.on
+    ? 'off'
+    : g.kept
+      ? 'kept'
+      : g.running
+        ? g.builtAt === undefined ? 'building' : 'updating'
+        : g.builtAt === undefined ? 'none' : 'ready'
   return { state, reason: h.off, builtAt: g.builtAt, bytes: g.bytes }
 }
 
@@ -76,12 +89,14 @@ export function registerGraph(on: On, ctx: Ctx): void {
 // session starts.
 async function graphStart($: EngineInterface, e: Parameters<Start>[1], next: Parameters<Start>[2], ctx: Ctx, gr: Gr) {
   gr.root = gr.bin = undefined
+  ctx.shared.graph.kept = false
   await setup($, e.cwd, ctx, gr).catch((err: unknown) => fail(ctx, err))
   return next(e)
 }
 
 // CI, no repo, no graphify and each refusal turn the graph off; else the exclude file gets its
-// line and the first build starts.
+// line and the first build starts. The root and binary are set last, so a fault on the way leaves
+// the graph idle.
 async function setup($: EngineInterface, cwd: string, ctx: Ctx, gr: Gr): Promise<void> {
   const unset = () => undefined
   const refuse = (why: string) => {
@@ -109,16 +124,17 @@ async function setup($: EngineInterface, cwd: string, ctx: Ctx, gr: Gr): Promise
   const machine = await $.session.machine().catch(unset)
   // A binary that does not start is missing; one that times out or fails otherwise is a failure.
   let broke: unknown
-  for (const bin of machine?.sysname === 'Windows_NT' ? ['graphify', 'graphify.exe'] : ['graphify']) {
-    const v = await $.process.run([bin, '--version'], { timeoutMs: PROBE_MS }).catch((err: unknown) => {
+  let bin: string | undefined
+  for (const b of machine?.sysname === 'Windows_NT' ? ['graphify', 'graphify.exe'] : ['graphify']) {
+    const v = await $.process.run([b, '--version'], { timeoutMs: PROBE_MS }).catch((err: unknown) => {
       if (!missing(err)) broke ??= err
     })
     if (v && v.exitCode === 0 && /^graphify \d/.test(v.stdout)) {
-      gr.bin = bin
+      bin = b
       break
     }
   }
-  if (gr.bin === undefined) {
+  if (bin === undefined) {
     if (broke !== undefined) throw broke
     setOff(ctx, 'not installed')
     noteOf(ctx, 'off: not installed')
@@ -142,8 +158,9 @@ async function setup($: EngineInterface, cwd: string, ctx: Ctx, gr: Gr): Promise
     host: machine ? `${machine.sysname} ${machine.release}` : '',
     session: await $.session.id().catch(() => ''),
   }
-  gr.root = root
   ctx.shared.graph.builtAt = await builtAt($, out)
+  gr.root = root
+  gr.bin = bin
   request($, ctx, gr)
 }
 
@@ -158,7 +175,9 @@ async function graphComplete($: EngineInterface, e: Parameters<Complete>[1], nex
 }
 
 // One run at a time: a request during a run marks dirty, and one more run follows. Never awaited.
+// After graphify kept the old graph, none: each later run would redo the same work, refused again.
 function request($: EngineInterface, ctx: Ctx, gr: Gr): void {
+  if (ctx.shared.graph.kept) return
   if (ctx.shared.graph.running) {
     gr.dirty = true
     return
@@ -172,7 +191,7 @@ async function runs($: EngineInterface, ctx: Ctx, gr: Gr): Promise<void> {
   try {
     do {
       gr.dirty = false
-    } while (isOn(ctx) && (await runOnce($, ctx, gr)) && gr.dirty)
+    } while (isOn(ctx) && (await runOnce($, ctx, gr)) && gr.dirty && !ctx.shared.graph.kept)
   } catch (err) {
     fail(ctx, err)
   } finally {
@@ -203,18 +222,29 @@ async function runOnce($: EngineInterface, ctx: Ctx, gr: Gr): Promise<boolean> {
     return false
   }
   // shortcut: read then write is not atomic, so two sessions in the same instant both run; graphify's own file lock queues the second. Take the lock by an exclusive create if the engine gets one.
-  await $.fs.write(lockPath, JSON.stringify({ ...gr.me, at: now }))
+  const mine = JSON.stringify({ ...gr.me, at: now })
+  await $.fs.write(lockPath, mine)
   try {
+    const was = ctx.shared.graph.builtAt
     const r = await $.process.run([bin, 'update', root], { cwd: root, env: ENV, timeoutMs: RUN_MS })
+    const said = `${r.stdout}\n${r.stderr}`
     if (r.exitCode === 0) {
-      acted(ctx)
       ok(ctx)
+      // graphify leaves graph.json as it is when no node or edge changed.
       ctx.shared.graph.builtAt = await builtAt($, out)
-    } else if (/Refusing to overwrite|--force/.test(r.stderr)) {
-      // graphify keeps a graph with more nodes, or with LLM nodes the AST-only run lacks (the person's own run).
+      if (ctx.shared.graph.builtAt !== was) acted(ctx)
+    } else if (NO_CODE.test(said)) {
+      // No code and no graph yet: nothing to graph, not a fault.
       ok(ctx)
+    } else if (KEPT.test(said)) {
+      // A graph with more nodes, or with LLM nodes the AST-only run lacks (the person's own run).
+      ok(ctx)
+      ctx.shared.graph.kept = true
       noteOf(ctx, 'kept: graphify keeps the old graph; the new one lacks some of its nodes')
-    } else fail(ctx, new Error(`graphify update exit ${r.exitCode}: ${r.stderr.trim().split('\n').pop() ?? ''}`))
+    } else {
+      if (UNREAD.test(said)) noteOf(ctx, 'graphify cannot read graphify-out/graph.json. Delete it to build it again.')
+      fail(ctx, new Error(`graphify update exit ${r.exitCode}: ${r.stderr.trim().split('\n').pop() ?? ''}`))
+    }
   } catch (err) {
     // A binary gone since the probe is off as not installed; a timeout is a failure. graphify
     // writes graph.json in one step, so the old graph stays either way.
@@ -223,7 +253,8 @@ async function runOnce($: EngineInterface, ctx: Ctx, gr: Gr): Promise<boolean> {
       noteOf(ctx, 'off: not installed')
     } else fail(ctx, err)
   } finally {
-    await $.fs.write(lockPath, '').catch(() => {})
+    // Free only a lock that is still this run's: another session may have taken it as stale.
+    if ((await $.fs.read(lockPath).catch(() => '')) === mine) await $.fs.write(lockPath, '').catch(() => {})
     ctx.shared.graph.bytes = await diskUse($, out).catch(() => undefined)
   }
   return true

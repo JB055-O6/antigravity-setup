@@ -1,0 +1,303 @@
+import type { On } from 'claude-code'
+import { expect, mock, test } from 'claude-code/testing'
+
+const START = { cwd: '/repo', surface: 'terminal', isInteractive: true } as const
+const END = { reason: 'prompt_input_exit', sessionId: 's1', resume: { id: 's1' } } as const
+const TIMEOUT = 'process.run timed out after 2000 ms'
+
+type Rewrite = (cmd: string) => { stdout: string; exitCode: number } | 'timeout'
+// rtk's own answer for the commands these tests use: git, grep and false at a command start get
+// `rtk ` (exit 3); anything else has no rewrite (exit 1).
+const RTK_REWRITE: Rewrite = (cmd) => {
+  const out = cmd.replace(/(^|&& |\| )(git|grep|false)\b/g, '$1rtk $2')
+  return out === cmd ? { stdout: '', exitCode: 1 } : { stdout: `${out}\n`, exitCode: 3 }
+}
+
+// Hooks here stand for the engine beneath the plugin.
+function quiet(on: On, env: Record<string, string> = {}) {
+  mock.store(on)
+  mock.env(on, env)
+  on('ui.status', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+  on('turn.start', (_, e) => ({ turnId: e.turnId }))
+}
+
+// The rtk binary: `--version` (null: not installed), `rewrite` and `gain` (its totals, in turn).
+function rtk(on: On, o: { version?: string | null; rewrite?: Rewrite; gain?: number[]; bin?: string } = {}) {
+  const runs: string[][] = []
+  const timeouts: Array<number | undefined> = []
+  let g = 0
+  const res = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+  on('process.run', (_, e) => {
+    const argv = [...e.argv]
+    runs.push(argv)
+    timeouts.push(e.init?.timeoutMs)
+    if (argv[0] !== (o.bin ?? 'rtk') || o.version === null) throw new Error(`spawn ${argv[0]} ENOENT`)
+    if (argv[1] === '--version') return res(o.version ?? 'rtk 1.2.1\n')
+    if (argv[1] === 'gain') return res(JSON.stringify({ summary: { total_commands: 1, total_saved: o.gain?.[Math.min(g++, o.gain.length - 1)] ?? 0 } }))
+    if (argv[1] === 'rewrite' && argv[2] === '--') {
+      const r = (o.rewrite ?? RTK_REWRITE)(argv[3]!)
+      // A refusal rejects the caller's run, as the engine's timeout does.
+      if (r === 'timeout') return { deny: TIMEOUT } as never
+      return res(r.stdout, r.exitCode)
+    }
+    throw new Error(`unexpected rtk call: ${argv.join(' ')}`)
+  })
+  return { runs, timeouts, rewrites: () => runs.filter((a) => a[1] === 'rewrite').map((a) => a[3]) }
+}
+
+// The permission check: `decide` answers per command. `asked` keeps the commands a plugin's
+// query checked (no tool_use_id); core's own check of the call that runs is not in it.
+function perms(on: On, decide: (cmd: string) => 'allow' | 'ask' | 'deny' = () => 'allow') {
+  const asked: string[] = []
+  on('tool.check', { tool: 'Bash' }, (_, e) => {
+    const c = (e.input as { command: string }).command
+    if (e.tool_use_id === undefined) asked.push(c)
+    return { decision: decide(c) }
+  })
+  return asked
+}
+
+// The Bash tool: keeps each command that reaches it.
+function bash(on: On, stdout = 'ok\n') {
+  const seen: string[] = []
+  on('tool.call', { tool: 'Bash' }, (_, e) => {
+    seen.push(e.command)
+    return { result: { stdout, stderr: '', interrupted: false } } as never
+  })
+  return seen
+}
+
+// $.state for company over an object the test reads: session.end writes health and the ledger there.
+function state(on: On) {
+  const held: Record<string, { value: unknown; version: number }> = {}
+  on('state.get', (_, e, next) => (e.plugin === 'company' ? { value: held[e.key] ?? { value: undefined, version: 0 } } : next(e)))
+  on('state.set', (_, e, next) => {
+    if (e.plugin !== 'company') return next(e)
+    const was = held[e.key] ?? { value: undefined, version: 0 }
+    held[e.key] = { value: e.value, version: was.version + 1 }
+    return { value: { isSet: true, version: was.version + 1 } }
+  })
+  return (key: 'health' | 'ledger' | 'panel') => (held[key]?.value as { value: any } | undefined)?.value
+}
+
+test('a rewrite runs the rtk form; rtk gain is read once per turn, and its growth counts as saved', async ($, on) => {
+  quiet(on)
+  const read = state(on)
+  const r = rtk(on, { gain: [100, 130, 150] })
+  const asked = perms(on)
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'git status' })
+  await $.tool.call({ tool: 'Bash', command: 'cd x && git log -5', agentId: 'a1' })
+  await $.turn.start({ text: 'next', turnId: 't2' })
+  await $.tool.call({ tool: 'Bash', command: 'git diff | head -50' })
+  expect(seen).toEqual(['rtk git status', 'cd x && rtk git log -5', 'rtk git diff | head -50'])
+  expect(r.rewrites()).toEqual(['git status', 'cd x && git log -5', 'git diff | head -50'])
+  // Both forms are checked, the original first.
+  expect(asked).toEqual(['git status', 'rtk git status', 'cd x && git log -5', 'cd x && rtk git log -5', 'git diff | head -50', 'rtk git diff | head -50'])
+  // The start total, then one read per turn with a rewrite.
+  expect(r.runs.filter((a) => a[1] === 'gain')).toEqual([['rtk', 'gain', '-f', 'json', '-p'], ['rtk', 'gain', '-f', 'json', '-p'], ['rtk', 'gain', '-f', 'json', '-p']])
+  expect(new Set(r.timeouts)).toEqual(new Set([2000]))
+  await $.session.end({ ...END })
+  expect(read('ledger').rtk).toEqual({ added: 0, saved: 50, acted: 3 })
+  expect(read('health').rtk).toMatchObject({ on: true, fails: 0 })
+})
+
+test('a deny rule on the original: rtk is not run, and core refuses the command as typed', async ($, on) => {
+  quiet(on)
+  const r = rtk(on, { rewrite: (c) => ({ stdout: `rtk ${c}`, exitCode: 3 }) })
+  // Only the plain form is denied, as `Bash(git push:*)` is: the rtk form would slip past it.
+  const asked = perms(on, (c) => (c.startsWith('git push') ? 'deny' : 'allow'))
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  const got = await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
+  expect(got.isError).toBe(true)
+  expect(seen).toEqual([])
+  expect(asked).toEqual(['git push origin main'])
+  expect(r.rewrites()).toEqual([])
+})
+
+test('an allowed original with an ask on its rtk form: no rewrite, one skip counted', async ($, on) => {
+  quiet(on)
+  const read = state(on)
+  rtk(on)
+  perms(on, (c) => (c.startsWith('rtk ') ? 'ask' : 'allow'))
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'git status' })
+  expect(seen).toEqual(['git status'])
+  await $.session.end({ ...END })
+  expect(read('panel').rtkSkipped).toBe(1)
+  expect(read('ledger')?.rtk?.acted ?? 0).toBe(0)
+})
+
+test('rtk missing: off as not installed, not a failure, and commands run as typed', async ($, on) => {
+  quiet(on)
+  const read = state(on)
+  const r = rtk(on, { version: null })
+  const asked = perms(on)
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'git status' })
+  expect(seen).toEqual(['git status'])
+  expect(r.runs).toEqual([['rtk', '--version']])
+  expect(asked).toEqual([])
+  await $.session.end({ ...END })
+  expect(read('health').rtk).toMatchObject({ on: false, off: 'not installed', fails: 0 })
+})
+
+test('a --version answer that is not rtk\'s counts as missing', async ($, on) => {
+  quiet(on)
+  const read = state(on)
+  rtk(on, { version: 'rust type kit 0.3\n' })
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'git status' })
+  expect(seen).toEqual(['git status'])
+  await $.session.end({ ...END })
+  expect(read('health').rtk).toMatchObject({ on: false, off: 'not installed' })
+})
+
+test('on Windows the probe also tries rtk.exe, and the rewrite runs it', async ($, on) => {
+  quiet(on)
+  on('session.info', () => ({ value: { transcriptPath: '', platform: 'windows' } }))
+  const r = rtk(on, { bin: 'rtk.exe' })
+  perms(on)
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'git status' })
+  expect(seen).toEqual(['rtk git status'])
+  expect(r.runs.slice(0, 3)).toEqual([['rtk', '--version'], ['rtk.exe', '--version'], ['rtk.exe', 'gain', '-f', 'json', '-p']])
+  expect(r.runs).toContainEqual(['rtk.exe', 'rewrite', '--', 'git status'])
+})
+
+test('a rewritten false still ends non-zero', async ($, on) => {
+  quiet(on, { COMPANY_RTK_MODE: 'full' })
+  rtk(on)
+  perms(on)
+  const seen: string[] = []
+  on('tool.call', { tool: 'Bash' }, (_, e) => {
+    seen.push(e.command)
+    return { isError: true, result: 'Error: Exit code 1', text: 'Error: Exit code 1' } as never
+  })
+  await $.session.start({ ...START })
+  const got = await $.tool.call({ tool: 'Bash', command: 'false' })
+  expect(seen).toEqual(['rtk false'])
+  expect(got).toMatchObject({ isError: true, text: 'Error: Exit code 1' })
+})
+
+test('a 2,000 ms timeout: the command runs as typed, and one failure counts', async ($, on) => {
+  quiet(on)
+  const read = state(on)
+  const r = rtk(on, { rewrite: () => 'timeout' })
+  perms(on)
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'git status' })
+  expect(seen).toEqual(['git status'])
+  expect(r.timeouts.at(-1)).toBe(2000)
+  await $.session.end({ ...END })
+  expect(read('health').rtk).toMatchObject({ on: true, fails: 1, streak: 1, lastErr: expect.stringContaining(TIMEOUT) })
+})
+
+test('three timeouts in a row turn rtk off; a reply in between clears the streak', async ($, on) => {
+  quiet(on)
+  const read = state(on)
+  let slow = [true, false, true, true, true]
+  const r = rtk(on, { rewrite: (c) => (slow.shift() ? 'timeout' : RTK_REWRITE(c)) })
+  perms(on)
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  for (let i = 0; i < 6; i++) await $.tool.call({ tool: 'Bash', command: 'git status' })
+  expect(seen).toEqual(['git status', 'rtk git status', 'git status', 'git status', 'git status', 'git status'])
+  // Off after the third timeout in a row: the sixth call never runs rtk.
+  expect(r.rewrites()).toHaveLength(5)
+  await $.session.end({ ...END })
+  expect(read('health').rtk).toMatchObject({ on: false, off: 'errors', fails: 4, streak: 3 })
+})
+
+test('bashcap still cuts the output when rtk times out or has no rewrite on the same call', async ($, on) => {
+  quiet(on)
+  on('session.info', () => ({ value: { transcriptPath: '', scratchpadDir: '/sp' } }))
+  on('fs.write', () => ({ value: undefined }))
+  rtk(on, { rewrite: (c) => (c === 'make slow' ? 'timeout' : RTK_REWRITE(c)) })
+  perms(on)
+  const seen = bash(on, 'line ok\n'.repeat(2500))
+  await $.session.start({ ...START })
+  for (const command of ['make slow', 'make test']) {
+    const got = await $.tool.call({ tool: 'Bash', command })
+    expect((got.result as { stdout: string }).stdout).toContain('[company: ')
+  }
+  expect(seen).toEqual(['make slow', 'make test'])
+})
+
+test('a call for an attached machine (_host) is never touched', async ($, on) => {
+  quiet(on)
+  const r = rtk(on)
+  const asked = perms(on)
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'git status', _host: 'laptop' } as never)
+  expect(seen).toEqual(['git status'])
+  expect(r.rewrites()).toEqual([])
+  expect(asked).toEqual([])
+})
+
+test('under CI rtk is off (cloud) and never probed', async ($, on) => {
+  quiet(on, { CI: 'true' })
+  const read = state(on)
+  const r = rtk(on)
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'git status' })
+  expect(seen).toEqual(['git status'])
+  expect(r.runs).toEqual([])
+  await $.session.end({ ...END })
+  expect(read('health').rtk).toMatchObject({ on: false, off: 'cloud', fails: 0 })
+})
+
+test('light mode leaves grep as typed; COMPANY_RTK_MODE=full rewrites it', async ($, on) => {
+  quiet(on, { COMPANY_RTK_MODE: 'full' })
+  rtk(on)
+  perms(on)
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'grep -rn foo .' })
+  expect(seen).toEqual(['rtk grep -rn foo .'])
+})
+
+test('light mode (the default) leaves grep as typed', async ($, on) => {
+  quiet(on)
+  rtk(on)
+  perms(on)
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'grep -rn foo .' })
+  await $.tool.call({ tool: 'Bash', command: 'git status' })
+  expect(seen).toEqual(['grep -rn foo .', 'rtk git status'])
+})
+
+test('skip rules: a heredoc and a command already in rtk form never reach rtk', async ($, on) => {
+  quiet(on)
+  const r = rtk(on)
+  perms(on)
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: "git apply <<'EOF'" })
+  await $.tool.call({ tool: 'Bash', command: 'rtk git status' })
+  expect(seen).toEqual(["git apply <<'EOF'", 'rtk git status'])
+  expect(r.rewrites()).toEqual([])
+})
+
+test('project rtk filters: one notice, and company never runs rtk trust', async ($, on) => {
+  quiet(on)
+  const r = rtk(on)
+  on('fs.exists', (_, e) => ({ value: e.path === '/repo/.rtk/filters.toml' }))
+  const notices: string[] = []
+  on('session.append', (_, e, next) => (notices.push(String((e.message.content as any)[0]?.text ?? '')), next(e)))
+  await $.session.start({ ...START })
+  expect(notices.filter((n) => n.includes('.rtk/filters.toml'))).toEqual(['company · RTK · This repo has RTK filters in .rtk/filters.toml. Company does not trust them.'])
+  expect(r.runs.some((a) => a.includes('trust'))).toBe(false)
+})

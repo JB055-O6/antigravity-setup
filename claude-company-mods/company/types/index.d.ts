@@ -12,6 +12,8 @@ export type Panel = {
   routed: number
   governed: number
   diet: number
+  // rtk rewrites left out for a permission reason, this load.
+  rtkSkipped?: number
   log: PanelLine[]
   runs: CrewRun[]
 }

@@ -10,6 +10,7 @@ import { registerDiet } from './modules/diet'
 import { registerGovernor } from './modules/governor'
 import { registerMeter } from './modules/meter'
 import { registerNudge } from './modules/nudge'
+import { registerRtk } from './modules/rtk'
 import { registerCrew, registerRouter } from './modules/router'
 import { finalFlush, newSession, ready, save } from './persist'
 
@@ -114,6 +115,7 @@ export const register: Register = (on, options) => {
   registerGovernor(on, use('governor'))
   registerDiet(on, use('diet'))
   registerBashcap(on, use('bashcap'))
+  registerRtk(on, use('rtk'))
   registerAudit(on, use('audit'))
   registerNudge(on, use('nudge'))
 }

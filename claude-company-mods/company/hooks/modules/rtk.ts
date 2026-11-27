@@ -20,12 +20,17 @@ const RUN_MS = 2000
 const FILTERS = '.rtk/filters.toml'
 
 // This load's rtk: the binary the probe found (none: rtk rests), the mode, the last
-// `rtk gain` total, and whether this turn has read it.
-type Rt = { bin?: string; mode: RtkMode; gain?: number; gainRead: boolean }
+// `rtk gain` total, whether this turn has read it, and whether a rewrite ran since the last read.
+type Rt = { bin?: string; mode: RtkMode; gain?: number; gainRead: boolean; unread: boolean }
+
+// A run that could not start because the binary is gone, not because rtk failed.
+const missing = (err: unknown) => /ENOENT/.test(String(err))
+// CI=false, 0 or empty is no CI.
+const truthy = (v: string | undefined) => !!v && !/^(false|0|)$/i.test(v.trim())
 
 export function registerRtk(on: On, ctx: Ctx): void {
   // shortcut: a hot reload fires no session.start, so rtk rests until the next session; probe on the first call if reloads matter in use.
-  const rt: Rt = { mode: DEFAULT_MODE, gainRead: false }
+  const rt: Rt = { mode: DEFAULT_MODE, gainRead: false, unread: false }
   on('session.start', {}, async ($, e, next) => {
     await ready($, ctx.shared)
     if (!isOn(ctx)) return next(e)
@@ -42,6 +47,12 @@ export function registerRtk(on: On, ctx: Ctx): void {
     // No ok() here: rtkCall counts a timeout itself and goes on, and ok() would clear that streak.
     try { return await rtkCall($, e, beneath(next), ctx, rt) } catch (err) { fail(ctx, err); throw err }
   })
+  // The last turn's rewrites: one more `rtk gain` read. Not awaited: the whole chain has 1.5 s,
+  // and the host's final write has run already, so this write is best-effort.
+  on('session.end', {}, ($, e, next) => {
+    if (rt.unread && rt.bin !== undefined) void addGain($, ctx, rt, rt.bin).then(() => save($, ctx.shared))
+    return next(e)
+  })
 }
 
 // Before the modules beneath: CI turns rtk off; else the probe finds the binary, or rtk is off
@@ -50,7 +61,7 @@ async function rtkStart($: EngineInterface, e: Parameters<Start>[1], next: Param
   rt.bin = undefined
   rt.gain = undefined
   const unset = () => undefined
-  if ((await $.env.get('CI').catch(unset)) || (await $.env.get('GITHUB_ACTIONS').catch(unset))) {
+  if (truthy(await $.env.get('CI').catch(unset)) || truthy(await $.env.get('GITHUB_ACTIONS').catch(unset))) {
     setOff(ctx, 'cloud')
     noteOf(ctx, 'off: CI run')
     return next(e)
@@ -58,16 +69,24 @@ async function rtkStart($: EngineInterface, e: Parameters<Start>[1], next: Param
   const mode = await $.env.get('COMPANY_RTK_MODE').catch(unset)
   rt.mode = mode === 'light' || mode === 'full' ? mode : DEFAULT_MODE
   const windows = await $.session.info().then((i) => i.platform === 'windows', () => false)
+  // A binary that does not start is missing; one that times out or fails otherwise is a failure.
+  let broke: unknown
   for (const bin of windows ? ['rtk', 'rtk.exe'] : ['rtk']) {
-    const v = await $.process.run([bin, '--version'], { timeoutMs: RUN_MS }).catch(() => undefined)
-    if (v?.exitCode === 0 && /^rtk \d/.test(v.stdout)) {
+    const v = await $.process.run([bin, '--version'], { timeoutMs: RUN_MS }).catch((err: unknown) => {
+      if (!missing(err)) broke ??= err
+    })
+    if (v && v.exitCode === 0 && /^rtk \d/.test(v.stdout)) {
       rt.bin = bin
       break
     }
   }
   if (rt.bin === undefined) {
-    setOff(ctx, 'not installed')
-    noteOf(ctx, 'off: not installed')
+    // rtk stays on with no binary, so it rests this session; the error shows in its health.
+    if (broke !== undefined) fail(ctx, broke)
+    else {
+      setOff(ctx, 'not installed')
+      noteOf(ctx, 'off: not installed')
+    }
     return next(e)
   }
   // The start total, so the first turn's delta is this session's alone.
@@ -81,12 +100,17 @@ async function rtkCall($: EngineInterface, e: Parameters<Bash>[1], next: Paramet
   try {
     cmd = await rewrite($, e, ctx, rt)
   } catch (err) {
-    // rtk timed out or did not start: one failure, and the command runs as typed.
-    fail(ctx, err)
+    // The command runs as typed. A binary gone since the probe is off as not installed;
+    // a timeout or another refusal is one failure.
+    if (missing(err)) {
+      setOff(ctx, 'not installed')
+      noteOf(ctx, 'off: not installed')
+    } else fail(ctx, err)
   }
   if (cmd === null) return next(e)
   const r = await next({ ...e, command: cmd })
   acted(ctx)
+  rt.unread = true
   if (!rt.gainRead && rt.bin !== undefined) {
     rt.gainRead = true
     await addGain($, ctx, rt, rt.bin)
@@ -98,8 +122,12 @@ async function rtkCall($: EngineInterface, e: Parameters<Bash>[1], next: Paramet
 // The rtk form of the call's command, or null to run it as typed. Throws only when rtk fails.
 async function rewrite($: EngineInterface, e: Parameters<Bash>[1], ctx: Ctx, rt: Rt): Promise<string | null> {
   const cmd = e.command
-  // `_host` names the person's machine (Remote Control): never touched.
-  if (rt.bin === undefined || typeof cmd !== 'string' || e._host || isDeviceTool(e.tool) || !shouldTry(cmd)) return null
+  // `_host` names the person's machine (Remote Control): never touched. Read with no type: the
+  // engine types have it only where the session has attached machines. Any value but none counts.
+  const host = (e as { readonly _host?: unknown })._host
+  const device = (host !== undefined && host !== null && host !== '') || isDeviceTool(e.tool)
+  // Only a read-only command goes to rtk at all: a write never meets it.
+  if (rt.bin === undefined || typeof cmd !== 'string' || device || !shouldTry(cmd) || !inMode(cmd, 'full')) return null
   // The tool's arguments as the permission check reads them.
   const { tool: _tool, tool_use_id: _id, agentId: _agent, requestMeta: _meta, ...args } = e
   // Permission first: a command that is denied or asks for a prompt stays as typed, and rtk is not run.
@@ -140,4 +168,5 @@ async function addGain($: EngineInterface, ctx: Ctx, rt: Rt, bin: string): Promi
   if (now === undefined) return
   if (rt.gain !== undefined && now > rt.gain) saved(ctx, now - rt.gain)
   rt.gain = now
+  rt.unread = false
 }

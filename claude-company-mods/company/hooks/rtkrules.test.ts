@@ -22,21 +22,37 @@ test('acceptRewrite: the rtk form of a command and of a chain', () => {
   expect(acceptRewrite('ls | grep foo', 'ls | rtk grep foo', 3)).toBe('ls | rtk grep foo')
 })
 
-// Review Focus 1: pipes and redirects stay exactly as typed.
-test('pipes and redirects: accepted only when they stay exactly as typed', () => {
+// What the module does with rtk's answer: acceptRewrite, then inMode.
+const decide = (original: string, stdout: string, mode: 'light' | 'full' = 'light') => {
+  const out = acceptRewrite(original, stdout, 3)
+  return out !== null && inMode(out, mode) ? out : null
+}
+
+// Review Focus 1 (ruled): a piped command is left as typed, since a compact left side changes what
+// the right side reads (`git log -10 | wc -l`: 140 lines plain, 46 under rtk). A redirect stands only
+// as typed, and only to a stream or /dev/null.
+test('pipes and redirects: a pipe is left as typed; a redirect stands only exactly as typed', () => {
   for (const [original, stdout, want] of [
-    ['git diff | head -50', 'rtk git diff | head -50', 'rtk git diff | head -50'],
+    ['git diff | head -50', 'rtk git diff | head -50', null],
     ['git diff | head -50', 'rtk git diff', null],
     ['git diff | head -50', 'rtk git diff | head -5', null],
-    ['git diff | head -50', 'rtk git diff |head -50', null],
-    ['git diff | head -50', 'rtk git diff | rtk head -50', 'rtk git diff | rtk head -50'],
-    ['git log > out.txt', 'rtk git log > out.txt', 'rtk git log > out.txt'],
+    ['git log -10 | wc -l', 'rtk git log -10 | wc -l', null],
+    ['ls | grep foo', 'ls | rtk grep foo', null],
+    ['git status | head', 'rtk git status | head', null],
+    ['git log > out.txt', 'rtk git log > out.txt', null],
     ['git log > out.txt', 'rtk git log', null],
-    ['git log > out.txt', 'rtk git log >> out.txt', null],
-    ['git log > out.txt', 'rtk git log > out.txt 2>&1', null],
     ['git status 2>&1', 'rtk git status 2>&1', 'rtk git status 2>&1'],
     ['git status 2>&1', 'rtk git status', null],
-  ] as const) expect([original, stdout, acceptRewrite(original, stdout, 3)]).toEqual([original, stdout, want])
+    ['git status 2>/dev/null', 'rtk git status 2>/dev/null', 'rtk git status 2>/dev/null'],
+    ['git status 2>/dev/null', 'rtk git status', null],
+    ['git status >/dev/null 2>&1', 'rtk git status >/dev/null 2>&1', 'rtk git status >/dev/null 2>&1'],
+  ] as const) {
+    for (const mode of ['light', 'full'] as const) expect([original, stdout, mode, decide(original, stdout, mode)]).toEqual([original, stdout, mode, want])
+  }
+  // acceptRewrite alone still holds the reversible rule for pipes and redirects.
+  expect(acceptRewrite('git diff | head -50', 'rtk git diff | head -50', 3)).toBe('rtk git diff | head -50')
+  expect(acceptRewrite('git diff | head -50', 'rtk git diff |head -50', 3)).toBeNull()
+  expect(acceptRewrite('git log > out.txt', 'rtk git log >> out.txt', 3)).toBeNull()
 })
 
 test('acceptRewrite: no rewrite unless exit 3 or 0 with new text', () => {
@@ -83,9 +99,9 @@ test('acceptRewrite: a leading dash in the arguments keeps the check whole', () 
 
 test('inMode: light takes the read-only forms, full adds more read-only forms', () => {
   for (const c of [
-    'rtk git status', 'cd x && rtk git log -5', 'rtk git diff | head -50', 'rtk git show HEAD', 'rtk git blame a.ts', 'rtk git branch',
-    'rtk git branch -a', 'rtk ls -la', 'rtk tree -L 2', 'rtk find . -name "*.ts" -type f', 'rtk wc -l a', 'ls | rtk grep foo',
-    'rtk rg -n "a|b" src', 'rtk docker ps', 'rtk docker images', 'rtk docker logs x', 'rtk kubectl get pods', 'rtk kubectl describe pod x',
+    'rtk git status', 'cd x && rtk git log -5', 'rtk git diff --stat', 'rtk git show HEAD', 'rtk git blame a.ts', 'rtk git branch',
+    'rtk git branch -a', 'rtk ls -la', 'rtk tree -L 2', 'rtk tree -a', 'rtk find . -name "*.ts" -type f', 'rtk wc -l a', 'rtk grep -rn foo .',
+    'rtk rg -n "a|b" src', "rtk ls 'a b*'", 'rtk git branch 2>/dev/null', 'rtk docker ps', 'rtk docker images', 'rtk docker logs x', 'rtk kubectl get pods', 'rtk kubectl describe pod x',
     'rtk kubectl logs x', 'rtk git status; false', 'rtk git log -5 || true', 'rtk git status 2>&1', 'rtk ls 2>/dev/null', 'rtk git diff >/dev/null',
     "rtk git log --format='%h $s'", 'rtk find . \\( -name a -o -name b \\)',
   ]) {
@@ -114,6 +130,13 @@ const FORBIDDEN = [
   'git status && git push', 'git push && git status', 'git status; rm -rf x', 'git status;git push', 'git status | xargs rm', 'git log > out.txt',
   'git log >> out.txt', 'git status & git push', 'git log $(git push)', 'git log `git push`', 'git log "$X"', 'find . $ACTION', '(git push)',
   'git status |& tee x', 'ls < x', 'FOO=1 git status', 'sudo ls', 'git status | tee out.txt', 'cat a | sh', 'git -C x push',
+  // Review round 1: each ran as a write in bash (scratch repo) while the first parse called it read-only.
+  'find . -{delete,print}', 'git log -1 --{output=o2.txt,stat}', 'git branch 2&>/dev/null', "git branch '2'>/dev/null", 'git branch \\2>/dev/null',
+  'tree -ao out.txt', 'tree -o out.txt', 'git stash list --output=o3.txt',
+  // Globs: a planted file name like `--output=x` expands into a flag.
+  'git log *', 'ls ?', 'git diff -- [ab].ts', 'find . -name *.ts',
+  // bash splits words on space and tab only.
+  'git\u00a0push', 'git log\u00a0--output=x',
 ] as const
 
 test('forbidden forms: never rewritten in light or full, whatever rtk offers', () => {
@@ -127,11 +150,21 @@ test('forbidden forms: never rewritten in light or full, whatever rtk offers', (
 })
 
 test('parts: words as the shell passes them; null for what the check cannot read', () => {
-  expect(parts('cd x && git log -5 | head -50')).toEqual([['cd', 'x'], ['git', 'log', '-5'], ['head', '-50']])
-  expect(parts(`grep -rn "a|b; c" 'x && y' .`)).toEqual([['grep', '-rn', 'a|b; c', 'x && y', '.']])
-  expect(parts('git status 2>&1 | wc -l')).toEqual([['git', 'status'], ['wc', '-l']])
+  expect(parts('cd x && git log -5 || true; ls')).toEqual([['cd', 'x'], ['git', 'log', '-5'], ['true'], ['ls']])
+  expect(parts(`grep -rn "a|b; c *{x}" 'x && y' .`)).toEqual([['grep', '-rn', 'a|b; c *{x}', 'x && y', '.']])
+  expect(parts('git status 2>&1')).toEqual([['git', 'status']])
   expect(parts('ls &>/dev/null')).toEqual([['ls']])
-  for (const c of ['git status;', '; ls', 'ls &', 'ls > a', 'ls 2> a', 'ls >/dev/nullx', 'ls "a', 'ls \\', 'ls $HOME', 'echo "$(id)"', 'echo `id`', 'ls\nrm x']) {
+  // A digit before `&>`, quoted, or escaped is a word that bash passes on.
+  expect(parts('git branch 2&>/dev/null')).toEqual([['git', 'branch', '2']])
+  expect(parts("git branch '2'>/dev/null")).toEqual([['git', 'branch', '2']])
+  expect(parts('git branch \\2>/dev/null')).toEqual([['git', 'branch', '2']])
+  expect(parts('git branch 2 >/dev/null')).toEqual([['git', 'branch', '2']])
+  expect(parts('git\u00a0push')).toEqual([['git\u00a0push']])
+  expect(parts('git\tstatus')).toEqual([['git', 'status']])
+  for (const c of [
+    'git status;', '; ls', 'ls &', 'ls > a', 'ls 2> a', 'ls >/dev/nullx', 'ls "a', 'ls \\', 'ls $HOME', 'echo "$(id)"', 'echo `id`', 'ls\nrm x',
+    'ls | wc', 'ls |& wc', 'ls {a,b}', 'ls *', 'ls a?', 'ls [ab]', 'ls \\\n',
+  ]) {
     expect([c, parts(c)]).toEqual([c, null])
   }
 })

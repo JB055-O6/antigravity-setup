@@ -25,7 +25,8 @@ export const FORMS: readonly Form[] = [
   // List only: any other word names a branch to make, or an action.
   { words: ['git', 'branch'], only: /^(-a|-r|-l|-v|-vv|--all|--remotes|--list|--show-current|--verbose|--no-color)$/ },
   { words: ['ls'] },
-  { words: ['tree'], never: /^(-o|--output)/ },
+  // `-o` names an output file, alone or in a bundle (`-ao`).
+  { words: ['tree'], never: /^(-[^-]*o|--output)/ },
   { words: ['find'], never: FIND_WRITES },
   { words: ['wc'] },
   { words: ['grep'] },
@@ -37,7 +38,7 @@ export const FORMS: readonly Form[] = [
   { words: ['kubectl', 'get'] },
   { words: ['kubectl', 'describe'] },
   { words: ['kubectl', 'logs'] },
-  { words: ['git', 'stash', 'list'], full: true },
+  { words: ['git', 'stash', 'list'], never: OUTPUT, full: true },
   { words: ['diff'], full: true },
   { words: ['gh', 'pr', 'list'], full: true },
   { words: ['gh', 'pr', 'view'], full: true },
@@ -108,21 +109,24 @@ function formOf(w: readonly string[]): Form | undefined {
   })
 }
 
-// The command split at unquoted `&&`, `||`, `;` and `|`, each part as its words with quotes
-// removed, as the shell passes them. Null for what this check cannot see through: `$`
-// (a variable or `$(...)`), backticks, `&` alone, `(`, `)`, `<`, a newline, an empty part, and
-// any `>` but `>&1`, `>&2` and `> /dev/null`.
-// shortcut: an unquoted glob is taken as typed; a file named like a flag (`-delete`) could expand into one.
+// The command split at unquoted `&&`, `||` and `;`, each part as its words with quotes removed,
+// as bash passes them. Null for what this check cannot see through: a pipe (a compact left side
+// changes what the right side reads), `$` (a variable or `$(...)`), backticks, `&` alone, `(`,
+// `)`, `<`, a brace or a glob (`{`, `*`, `?`, `[`: a file name like `--output=x` can expand into
+// a flag), a newline, an empty part, and any `>` but `>&1`, `>&2` and `> /dev/null`.
 export function parts(cmd: string): string[][] | null {
   const out: string[][] = []
   let words: string[] = []
   let word = ''
   let inWord = false
+  // The word holds a quote or an escape: then a digit before `>` is a word, not a stream.
+  let quoted = false
   let q = ''
   const endWord = () => {
     if (inWord) words.push(word)
     word = ''
     inWord = false
+    quoted = false
   }
   // False for an empty part.
   const endPart = () => {
@@ -141,9 +145,11 @@ export function parts(cmd: string): string[][] | null {
     }
     if (c === '$' || c === '`' || c === '\n' || c === '\r') return null
     if (c === '\\') {
-      if (i + 1 >= cmd.length) return null
-      word += cmd[++i]
-      inWord = true
+      const n = cmd[i + 1]
+      if (n === undefined || n === '\n' || n === '\r') return null
+      word += n
+      i++
+      inWord = quoted = true
       continue
     }
     if (q === '"') {
@@ -153,23 +159,23 @@ export function parts(cmd: string): string[][] | null {
     }
     if (c === "'" || c === '"') {
       q = c
-      inWord = true
-    } else if (/\s/.test(c)) endWord()
+      inWord = quoted = true
+    } else if (c === ' ' || c === '\t') endWord()
     else if (c === '>' || (c === '&' && cmd[i + 1] === '>')) {
-      // A lone digit before `>` is the stream the redirect names, not a word.
-      if (/^\d$/.test(word)) {
+      // An unquoted lone digit right before `>` or `>>` names the stream; before `&>` it is a word.
+      if (c === '>' && !quoted && /^\d$/.test(word)) {
         word = ''
         inWord = false
       } else endWord()
-      const m = /^(&>|>>?)(&[12]|\s*\/dev\/null)(?![^\s;&|])/.exec(cmd.slice(i))
+      const m = /^(&>|>>?)(&[12]|[ \t]*\/dev\/null)(?![^ \t;&|])/.exec(cmd.slice(i))
       if (!m) return null
       i += m[0].length - 1
-    } else if ((c === '&' && cmd[i + 1] === '&') || (c === '|' && cmd[i + 1] === '|')) {
+    } else if ((c === '&' || c === '|') && cmd[i + 1] === c) {
       if (!endPart()) return null
       i++
-    } else if (c === ';' || (c === '|' && cmd[i + 1] !== '&')) {
+    } else if (c === ';') {
       if (!endPart()) return null
-    } else if (c === '&' || c === '|' || c === '(' || c === ')' || c === '<') return null
+    } else if ('&|()<{*?['.includes(c)) return null
     else {
       word += c
       inWord = true

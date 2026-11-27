@@ -13,6 +13,6 @@ export const MODULE_META: readonly ModuleMeta[] = [
   { id: 'graph', title: 'Graph', what: 'Builds and updates the code graph and adds one hint line.', caps: {} },
   { id: 'audit', title: 'Audit', what: 'Measures the cost of each system prompt section and tool description.', caps: {} },
   { id: 'nudge', title: 'Nudge', what: 'Suggests /compact when the context window is 60% full.', caps: {} },
-  { id: 'install', title: 'Install', what: 'Installs RTK and graphify after you ask for them.', caps: {} },
+  { id: 'setup', title: 'Setup', what: 'Sets up this machine once, after you agree: RTK, graphify, RTK allow rules, Company first.', caps: {} },
   { id: 'dashboard', title: 'Dashboard', what: 'Shows the band, the pane and the /company text.', caps: {} },
 ]

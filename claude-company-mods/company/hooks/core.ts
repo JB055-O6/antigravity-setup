@@ -2,7 +2,7 @@
 import type { CrewRun, PanelLine } from '../types'
 import type { Windows } from './governor'
 
-const IDS = ['charter', 'meter', 'router', 'governor', 'diet', 'bashcap', 'rtk', 'graph', 'audit', 'nudge', 'install', 'dashboard'] as const
+const IDS = ['charter', 'meter', 'router', 'governor', 'diet', 'bashcap', 'rtk', 'graph', 'audit', 'nudge', 'setup', 'dashboard'] as const
 export type ModuleId = (typeof IDS)[number]
 // Chars (code points) a module may put into context, per shape.
 export type Caps = { section?: number; subagentPrompt?: number; toolContext?: number }
@@ -49,7 +49,11 @@ export type Shared = {
   graph: { running: boolean; builtAt?: number; bytes?: number; kept?: boolean }
   // A tool that can change files (Write, Edit, NotebookEdit, Bash) ran since the main loop's last turn end.
   touched: boolean
+  // The one-time machine setup (setup module): its state from $.store, and a run going on.
+  setup: { state: SetupState; reason?: string; running: boolean }
 }
+
+export type SetupState = 'not asked' | 'declined' | 'done' | 'failed'
 
 export type Ctx = { id: ModuleId; caps: Caps; shared: Shared }
 export type ModuleMeta = { id: ModuleId; title: string; what: string; caps: Caps }
@@ -65,7 +69,7 @@ export function createShared(ids: readonly ModuleId[]): Shared {
   }
   return {
     health, ledger, efforts: new Map(), runs: [], runByTool: new Map(), economy: false, windows: {}, log: [], seq: 0,
-    version: '', offMachine: false, deviceAttached: false, dirty: false, routedTotal: 0, dirs: [], crew: 0, shown: 0, paneShown: false, top5: [], ownSections: {}, skippedPermission: 0, graph: { running: false }, touched: false,
+    version: '', offMachine: false, deviceAttached: false, dirty: false, routedTotal: 0, dirs: [], crew: 0, shown: 0, paneShown: false, top5: [], ownSections: {}, skippedPermission: 0, graph: { running: false }, touched: false, setup: { state: 'not asked', running: false },
   }
 }
 

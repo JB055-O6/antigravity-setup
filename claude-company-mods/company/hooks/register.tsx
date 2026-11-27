@@ -12,6 +12,7 @@ import { registerGovernor } from './modules/governor'
 import { registerMeter } from './modules/meter'
 import { registerNudge } from './modules/nudge'
 import { registerRtk } from './modules/rtk'
+import { registerSetup } from './modules/setup'
 import { registerCrew, registerRouter } from './modules/router'
 import { finalFlush, newSession, ready, save } from './persist'
 
@@ -120,4 +121,5 @@ export const register: Register = (on, options) => {
   registerGraph(on, use('graph'))
   registerAudit(on, use('audit'))
   registerNudge(on, use('nudge'))
+  registerSetup(on, use('setup'))
 }

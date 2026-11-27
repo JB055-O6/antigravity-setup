@@ -286,7 +286,7 @@ test('a restore that comes late keeps the health this load set meanwhile', async
     health: {
       value: {
         shape: 'health-1',
-        value: { install: { on: false, fails: 3, streak: 3, lastErr: 'Error: boom', off: 'errors' }, graph: { on: true, fails: 1, streak: 1 } },
+        value: { setup: { on: false, fails: 3, streak: 3, lastErr: 'Error: boom', off: 'errors' }, graph: { on: true, fails: 1, streak: 1 } },
       },
       version: 4,
     },
@@ -302,7 +302,7 @@ test('a restore that comes late keeps the health this load set meanwhile', async
   await $.session.end({ ...END })
   const health = (held.health!.value as { value: Record<string, unknown> }).value
   expect(health.graph).toEqual({ on: false, fails: 1, streak: 1, off: 'env' })
-  expect(health.install).toEqual({ on: false, fails: 3, streak: 3, lastErr: 'Error: boom', off: 'errors' })
+  expect(health.setup).toEqual({ on: false, fails: 3, streak: 3, lastErr: 'Error: boom', off: 'errors' })
 })
 
 test('session.end writes at once, within its bound, when the store hangs', async ($, on) => {

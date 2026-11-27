@@ -282,7 +282,7 @@ test('a plain hook and a {} hook on one event both fire on every event', async (
 
 test('register.tsx calls the module register functions in MODULE_META order', () => {
   const ids = MODULE_META.map((m) => m.id)
-  expect(ids).toEqual(['charter', 'meter', 'router', 'governor', 'diet', 'bashcap', 'rtk', 'graph', 'audit', 'nudge', 'install', 'dashboard'])
+  expect(ids).toEqual(['charter', 'meter', 'router', 'governor', 'diet', 'bashcap', 'rtk', 'graph', 'audit', 'nudge', 'setup', 'dashboard'])
   // This file's own copy of the module: registering fills MODULE_CALLS from the real calls.
   register((() => ({})) as never, {} as never)
   // The ported modules are called, in spec order among themselves; then every call keeps META order.

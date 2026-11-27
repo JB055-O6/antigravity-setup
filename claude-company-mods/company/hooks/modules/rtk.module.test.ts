@@ -173,19 +173,20 @@ test('on Windows the probe also tries rtk.exe, and the rewrite runs it', async (
   expect(r.runs).toContainEqual(['rtk.exe', 'rewrite', '--', 'git status'])
 })
 
-test('a rewritten false still ends non-zero', async ($, on) => {
-  quiet(on, { COMPANY_RTK_MODE: 'full' })
+// `false` is not a form rtk may run any more (ruling): a read-only form that fails stands in for it.
+test('a rewritten command that fails still ends non-zero', async ($, on) => {
+  quiet(on)
   rtk(on)
   perms(on)
   const seen: string[] = []
   on('tool.call', { tool: 'Bash' }, (_, e) => {
     seen.push(e.command)
-    return { isError: true, result: 'Error: Exit code 1', text: 'Error: Exit code 1' } as never
+    return { isError: true, result: 'Error: Exit code 128', text: 'Error: Exit code 128' } as never
   })
   await $.session.start({ ...START })
-  const got = await $.tool.call({ tool: 'Bash', command: 'false' })
-  expect(seen).toEqual(['rtk false'])
-  expect(got).toMatchObject({ isError: true, text: 'Error: Exit code 1' })
+  const got = await $.tool.call({ tool: 'Bash', command: 'git status' })
+  expect(seen).toEqual(['rtk git status'])
+  expect(got).toMatchObject({ isError: true, text: 'Error: Exit code 128' })
 })
 
 test('a 2,000 ms timeout: the command runs as typed, and one failure counts', async ($, on) => {
@@ -258,26 +259,33 @@ test('under CI rtk is off (cloud) and never probed', async ($, on) => {
   expect(read('health').rtk).toMatchObject({ on: false, off: 'cloud', fails: 0 })
 })
 
-test('light mode leaves grep as typed; COMPANY_RTK_MODE=full rewrites it', async ($, on) => {
-  quiet(on, { COMPANY_RTK_MODE: 'full' })
-  rtk(on)
-  perms(on)
-  const seen = bash(on)
-  await $.session.start({ ...START })
-  await $.tool.call({ tool: 'Bash', command: 'grep -rn foo .' })
-  expect(seen).toEqual(['rtk grep -rn foo .'])
-})
+for (const [env, want] of [[{}, 'du -sh .'], [{ COMPANY_RTK_MODE: 'full' }, 'rtk du -sh .']] as [Record<string, string>, string][]) {
+  test(`mode ${env.COMPANY_RTK_MODE ?? 'light (the default)'}: du is full only, grep is in both`, async ($, on) => {
+    quiet(on, env)
+    rtk(on, { rewrite: (c) => ({ stdout: `rtk ${c}`, exitCode: 3 }) })
+    perms(on)
+    const seen = bash(on)
+    await $.session.start({ ...START })
+    await $.tool.call({ tool: 'Bash', command: 'du -sh .' })
+    await $.tool.call({ tool: 'Bash', command: 'grep -rn foo .' })
+    expect(seen).toEqual([want, 'rtk grep -rn foo .'])
+  })
+}
 
-test('light mode (the default) leaves grep as typed', async ($, on) => {
-  quiet(on)
-  rtk(on)
-  perms(on)
-  const seen = bash(on)
-  await $.session.start({ ...START })
-  await $.tool.call({ tool: 'Bash', command: 'grep -rn foo .' })
-  await $.tool.call({ tool: 'Bash', command: 'git status' })
-  expect(seen).toEqual(['grep -rn foo .', 'rtk git status'])
-})
+// Ruling: rtk offers these (exit 0), and both permission checks allow them; none is ever rewritten.
+for (const env of [{}, { COMPANY_RTK_MODE: 'full' }] as Record<string, string>[]) {
+  test(`mode ${env.COMPANY_RTK_MODE ?? 'light'}: a mutating command is never rewritten`, async ($, on) => {
+    quiet(on, env)
+    const r = rtk(on, { rewrite: (c) => ({ stdout: `rtk ${c}`, exitCode: 0 }) })
+    perms(on)
+    const seen = bash(on)
+    await $.session.start({ ...START })
+    const cmds = ['git push --force', 'git commit -m x', 'git checkout -- .', 'git reset --hard', 'rm -rf build', 'find . -name x -delete', 'npm install x', 'git status && git push']
+    for (const command of cmds) await $.tool.call({ tool: 'Bash', command })
+    expect(seen).toEqual(cmds)
+    expect(r.rewrites()).toEqual(cmds)
+  })
+}
 
 test('skip rules: a heredoc and a command already in rtk form never reach rtk', async ($, on) => {
   quiet(on)

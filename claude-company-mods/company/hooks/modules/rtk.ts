@@ -1,6 +1,6 @@
 // RTK: rewrites Bash commands to their rtk form, which prints less. Safety comes first: a rewrite
-// stands only when it gives back the command as typed, fits the mode, and both the command and
-// its rtk form are allowed with no prompt. Calls for the person's devices are never touched.
+// stands only when it gives back the command as typed, every part is a read-only form (a write is
+// never rewritten, in any mode), and both forms are allowed with no prompt. Device calls are never touched.
 // Each expected miss (no rtk, a timeout, no rewrite, a refusal) runs the command as typed and
 // never throws: a throw would take bashcap's hook on the same call out with it.
 import type { EngineInterface, MatchedHook, On } from 'claude-code'

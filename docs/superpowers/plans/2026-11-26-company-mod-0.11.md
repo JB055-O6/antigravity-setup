@@ -231,7 +231,7 @@
 
 **Interfaces:**
 - Consumes: `Shared.efforts`, `Shared.runs`, `Shared.runByTool`, `Shared.economy` (sync reads only in `turn.step`).
-- Produces: `export function offMachineWithDevice(s: Shared): boolean`. Router and crew set `setOff(ctx, 'device attached')` when it is true at `session.start` or `session.attach` (a device is attached when the tool pool holds a tool matching `/^(enable__)?mcp__(remote-devices|claude-in-chrome)__/`, read with `$.tool.list()` at start/attach plus an observe-only `tool.list` hook; `$.session.surfaces()` lists viewer apps, NOT devices — corrected after review).
+- Produces: `export function offMachineWithDevice(s: Shared): boolean`. Router and crew set `setOff(ctx, 'device attached')` when it is true at `session.start` or `session.attach` (a device is attached when the tool pool holds a tool matching `/^(enable__)?mcp__(remote-devices|claude-in-chrome)(__|$)/`, read with `$.tool.list()` at start/attach plus an observe-only `tool.list` hook; `$.session.surfaces()` lists viewer apps, NOT devices — corrected after review).
 
 - [ ] **Step 1: Tests:** `main loop Opus low stays low`; `subagent Opus low goes to medium`; `a bookkeeping throw after a Fable reroute keeps the reroute` (stub `showStatus` path throws → the step still reaches the engine as `opus`/`max`); `a routeSpawn throw still adds the diet block`; `a background run closes on its completion and shows ended at session end` (Review Focus 4); `with a device attached off-machine, spawns are not rerouted`.
 - [ ] **Step 2:** Run: fail.

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { BASH_CAP, capCard, capLimits, cutOutput, outDir } from './bashcut'
+import { BASH_CAP, capCard, capLimits, cutOutput, deleteArgv, outDir } from './bashcut'
 
 const PATH = '/sp/company-out/t1.txt'
 const CAP = { ...BASH_CAP, path: PATH }
@@ -54,6 +54,19 @@ test('a surrogate pair at a cut point stays whole', () => {
   expect(LONE.test(d.text)).toBe(false)
 })
 
+test('an error line wholly in the head, its newline at the cut, is not kept twice', () => {
+  const text = 'a'.repeat(4989) + 'Error: boom' + '\n' + lines(10_000)
+  expect(text.indexOf('\n')).toBe(5000)
+  expect(cutOutput(text, CAP).text.split('Error: boom')).toHaveLength(2)
+})
+
+test('a cut that would not make the text shorter leaves it unchanged', () => {
+  // Long error lines all through: the middle lines kept and the marker outweigh what is cut.
+  const text = ('error ' + 'x'.repeat(284) + '\n').repeat(42)
+  expect(text.length).toBeGreaterThan(BASH_CAP.over)
+  expect(cutOutput(text, CAP)).toEqual({ text, cut: false, originalChars: text.length, keptChars: text.length })
+})
+
 test('a huge single line with an error word is still cut', () => {
   const text = 'x'.repeat(10_000) + ' error ' + 'y'.repeat(10_000)
   const c = cutOutput(text, CAP)
@@ -97,4 +110,11 @@ test('outputs go only under an absolute scratchpad', () => {
   expect(outDir('scratchpad')).toBeUndefined()
   expect(outDir('')).toBeUndefined()
   expect(outDir(undefined)).toBeUndefined()
+})
+
+test('the delete command: rm, or cmd rmdir with backslashes only on Windows', () => {
+  expect(deleteArgv('/sp/company-out', 'linux')).toEqual(['rm', '-rf', '--', '/sp/company-out'])
+  expect(deleteArgv('/sp/company-out', 'wsl')).toEqual(['rm', '-rf', '--', '/sp/company-out'])
+  expect(deleteArgv('/sp/company-out', undefined)).toEqual(['rm', '-rf', '--', '/sp/company-out'])
+  expect(deleteArgv(outDir('C:\\Users\\a b\\scratchpad')!, 'windows')).toEqual(['cmd', '/d', '/c', 'rmdir', '/s', '/q', 'C:\\Users\\a b\\scratchpad\\company-out'])
 })

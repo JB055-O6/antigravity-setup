@@ -1,5 +1,6 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
+import { dropNotice } from '../bashcut'
 import { createShared, estimateTokens, type Ctx } from '../core'
 import { MODULE_META } from '.'
 import { registerBashcap } from './bashcap'
@@ -141,30 +142,66 @@ test('economy halves the threshold', async ($, on) => {
   expect(ctx.shared.ledger.bashcap.acted).toBe(1)
 })
 
+// fs.exists answers `there()`; each process.run is kept, and `gone` says whether it deletes.
+function cleanup(on: On, o: { gone: boolean; fails?: boolean }) {
+  const runs: Array<readonly string[]> = []
+  const notices: string[] = []
+  let there = true
+  on('fs.exists', (_, e) => ({ value: e.path.endsWith('company-out') && there }))
+  on('process.run', (_, e) => {
+    runs.push(e.argv)
+    if (o.fails) throw new Error('spawn rm ENOENT')
+    if (o.gone) there = false
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.append', (_, e, next) => (notices.push(String((e.message.content as any)[0]?.text ?? '')), next(e)))
+  return { runs, notices }
+}
+
 test('session end deletes the saved outputs', async ($, on) => {
   quiet(on)
   engine(on, lines(20_000))
-  const runs: Array<readonly string[]> = []
-  let there = true
-  on('fs.exists', (_, e) => ({ value: e.path === '/sp/company-out' && there }))
-  on('process.run', (_, e) => {
-    runs.push(e.argv)
-    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-  })
+  const { runs, notices } = cleanup(on, { gone: true })
   await bash($)
   expect(await $.session.end({ ...END })).toEqual({ sessionId: 's1' })
   expect(runs).toEqual([['rm', '-rf', '--', '/sp/company-out']])
-  there = false
+  // Gone: the next session end runs nothing.
   await $.session.end({ ...END })
   expect(runs).toHaveLength(1)
+  // The cut's own chat line is there (no pane in a test); no delete notice.
+  expect(notices).not.toContain(dropNotice('/sp/company-out'))
 })
 
-test('a failed delete never disturbs session end', async ($, on) => {
+test('on Windows, session end deletes with cmd rmdir and backslashes', async ($, on) => {
+  quiet(on)
+  on('session.info', () => ({ value: { transcriptPath: '', scratchpadDir: 'C:\\Users\\a\\scratchpad', platform: 'windows' } }))
+  const { runs, notices } = cleanup(on, { gone: true })
+  await $.session.end({ ...END })
+  expect(runs).toEqual([['cmd', '/d', '/c', 'rmdir', '/s', '/q', 'C:\\Users\\a\\scratchpad\\company-out']])
+  expect(notices).toEqual([])
+})
+
+test('a failed delete never disturbs session end, and one notice names the folder', async ($, on) => {
   quiet(on)
   on('session.info', () => ({ value: { transcriptPath: '', scratchpadDir: '/sp' } }))
-  on('fs.exists', () => ({ value: true }))
-  on('process.run', () => {
-    throw new Error('spawn rm ENOENT')
-  })
+  const { runs, notices } = cleanup(on, { gone: false, fails: true })
   expect(await $.session.end({ ...END })).toEqual({ sessionId: 's1' })
+  expect(runs).toHaveLength(1)
+  expect(notices).toEqual([dropNotice('/sp/company-out')])
+})
+
+test('a delete that ends 0 but leaves the folder still gets the notice', async ($, on) => {
+  quiet(on)
+  on('session.info', () => ({ value: { transcriptPath: '', scratchpadDir: '/sp' } }))
+  const { notices } = cleanup(on, { gone: false })
+  await $.session.end({ ...END })
+  expect(notices).toEqual([dropNotice('/sp/company-out')])
+})
+
+test('a cut that would not shorten the output writes no file', async ($, on) => {
+  quiet(on)
+  const stdout = ('error ' + 'x'.repeat(284) + '\n').repeat(42)
+  const writes = engine(on, stdout)
+  expect((await bash($)).stdout).toBe(stdout)
+  expect(writes).toEqual([])
 })

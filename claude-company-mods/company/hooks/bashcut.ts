@@ -46,6 +46,17 @@ export function outDir(scratchpad: unknown): string | undefined {
   return `${scratchpad.replace(/[\\/]+$/, '')}/company-out`
 }
 
+// The command that deletes `dir` (the engine's fs has no delete). cmd reads `/x` as a switch,
+// so on Windows every `/` (outDir adds one) becomes `\`.
+export function deleteArgv(dir: string, platform: string | undefined): string[] {
+  return platform === 'windows' ? ['cmd', '/d', '/c', 'rmdir', '/s', '/q', dir.replace(/\//g, '\\')] : ['rm', '-rf', '--', dir]
+}
+
+// The chat notice when the saved outputs stay after session end.
+export function dropNotice(dir: string): string {
+  return `company · BASH CAP · Company cannot delete the saved Bash output. Delete this folder: ${dir}`
+}
+
 // Chars as whole KB (1 KB = 1,000 chars, as the V11 limit is counted).
 export function kb(chars: number): number {
   return Math.round(chars / 1000)
@@ -68,7 +79,8 @@ function isLow(c: number): boolean {
 // Up to `max` lines that reach into the cut middle [h, t) and match ERROR_LINE, in order.
 function errorLines(text: string, h: number, t: number, max: number): string[] {
   const out: string[] = []
-  let at = h > 0 ? text.lastIndexOf('\n', h - 1) + 1 : 0
+  // From `h`, not `h - 1`: a line whose `\n` sits at `h` is wholly in the head.
+  let at = text.lastIndexOf('\n', h) + 1
   while (at < t && out.length < max) {
     let end = text.indexOf('\n', at)
     if (end === -1) end = text.length

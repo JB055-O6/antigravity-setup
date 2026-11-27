@@ -1,7 +1,7 @@
 // Bash cap: cuts huge Bash output, main loop and subagents alike. It keeps the head, the tail and
 // the error lines, and saves the whole output under the session scratchpad until the session ends.
 import type { EngineInterface, MatchedHook, On } from 'claude-code'
-import { capLimits, cutOutput, kb, outDir } from '../bashcut'
+import { capLimits, cutOutput, deleteArgv, dropNotice, kb, outDir } from '../bashcut'
 import { acted, beneath, estimateTokens, fail, isOn, noteOf, ok, saved, type Ctx } from '../core'
 import { showStatus } from '../host'
 import { ready, save } from '../persist'
@@ -28,7 +28,7 @@ export function registerBashcap(on: On, ctx: Ctx): void {
   })
 }
 
-// After `next`: an output over the threshold is saved whole, then cut. Left alone: an errored
+// After `next`: an output over the threshold is cut, then saved whole. Left alone: an errored
 // result (the engine refuses a string where Bash's record goes, and cuts error text near 10 KB
 // itself), an image, and output over 30,000 chars, which the engine saved and shows as a preview.
 async function bashcapCall($: EngineInterface, e: Parameters<Bash>[1], next: Parameters<Bash>[2], ctx: Ctx) {
@@ -39,9 +39,12 @@ async function bashcapCall($: EngineInterface, e: Parameters<Bash>[1], next: Par
   // The engine joins stderr into stdout (V11 probe), so stdout is the whole output.
   const lim = capLimits(ctx.shared.economy)
   if (rec.stdout.length <= lim.over) return r
-  const path = await saveOutput($, e.tool_use_id, rec.stdout)
-  const c = cutOutput(rec.stdout, path === undefined ? lim : { ...lim, path })
+  const path = await outPath($, e.tool_use_id)
+  let c = cutOutput(rec.stdout, path === undefined ? lim : { ...lim, path })
   if (!c.cut) return r
+  // Saved only once the cut is sure, so no file is left unused. A failed write is an expected case:
+  // the marker then says "not saved", which is shorter than a path, so the cut still holds.
+  if (path !== undefined && !(await $.fs.write(path, rec.stdout).then(() => true, () => false))) c = cutOutput(rec.stdout, lim)
   try {
     acted(ctx)
     saved(ctx, estimateTokens(c.originalChars - c.keptChars))
@@ -55,28 +58,44 @@ async function bashcapCall($: EngineInterface, e: Parameters<Bash>[1], next: Par
   return { result: { ...rec, stdout: c.text }, context: r.context }
 }
 
-// `<scratchpad>/company-out/<tool_use_id>.txt`, or undefined when there is no scratchpad or the
-// write fails: both are expected cases, not faults.
-async function saveOutput($: EngineInterface, id: string, text: string): Promise<string | undefined> {
+// `<scratchpad>/company-out/<tool_use_id>.txt`, or undefined when there is no scratchpad.
+async function outPath($: EngineInterface, id: string): Promise<string | undefined> {
   try {
     const dir = outDir((await $.session.info()).scratchpadDir)
-    if (dir === undefined) return undefined
-    const path = `${dir}/${id.replace(/[^\w-]/g, '_') || 'output'}.txt`
-    await $.fs.write(path, text)
-    return path
+    return dir === undefined ? undefined : `${dir}/${id.replace(/[^\w-]/g, '_') || 'output'}.txt`
   } catch {
     return undefined
   }
 }
 
-// Deletes `<scratchpad>/company-out`; the engine's fs has no delete. Never throws.
-// shortcut: `rm` only, so on Windows the files stay in the scratchpad; add a Windows command if users need it.
+// Deletes `<scratchpad>/company-out`. Never throws. The outputs may hold secrets, so a folder
+// that is still there afterwards gets one chat notice that names it.
 async function dropOutputs($: EngineInterface): Promise<void> {
+  let dir: string | undefined
+  let argv: string[]
   try {
-    const dir = outDir((await $.session.info()).scratchpadDir)
+    const info = await $.session.info()
+    dir = outDir(info.scratchpadDir)
     if (dir === undefined || !(await $.fs.exists(dir))) return
-    await $.process.run(['rm', '-rf', '--', dir], { timeoutMs: DROP_MS })
+    argv = deleteArgv(dir, info.platform)
   } catch {
-    // A missing rm, a refusal or a timeout leaves the files in the scratchpad.
+    // Nothing known to delete.
+    return
+  }
+  try {
+    await $.process.run(argv, { timeoutMs: DROP_MS })
+  } catch {
+    // A missing command, a refusal or a timeout: the check below tells.
+  }
+  try {
+    // An exit code alone does not prove it: `rmdir /s` can end 0 with files left.
+    if (!(await $.fs.exists(dir))) return
+  } catch {
+    // Unknown: tell the user.
+  }
+  try {
+    await $.session.append({ message: { type: 'system', content: [{ type: 'text', text: dropNotice(dir) }] } })
+  } catch {
+    // No chat to post in.
   }
 }

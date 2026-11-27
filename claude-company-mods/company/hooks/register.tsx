@@ -3,11 +3,13 @@ import { PANE_ID, PanelView, panelText } from './panel'
 import { boot, readPanel, readPlace, showStatus } from './host'
 import { createShared, envOff, noteOf, resetHealth, setOff, type Ctx, type ModuleId } from './core'
 import { MODULE_META } from './modules'
+import { registerAudit } from './modules/audit'
 import { registerBashcap } from './modules/bashcap'
 import { registerCharter } from './modules/charter'
 import { registerDiet } from './modules/diet'
 import { registerGovernor } from './modules/governor'
 import { registerMeter } from './modules/meter'
+import { registerNudge } from './modules/nudge'
 import { registerCrew, registerRouter } from './modules/router'
 import { finalFlush, newSession, ready, save } from './persist'
 
@@ -112,4 +114,6 @@ export const register: Register = (on, options) => {
   registerGovernor(on, use('governor'))
   registerDiet(on, use('diet'))
   registerBashcap(on, use('bashcap'))
+  registerAudit(on, use('audit'))
+  registerNudge(on, use('nudge'))
 }

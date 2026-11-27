@@ -38,6 +38,8 @@ export type Shared = {
   // Last log line posted as a chat notice, and whether a surface draws the pane.
   shown: number
   paneShown: boolean
+  // The five biggest system prompt sections and tool descriptions, in chars (audit); /company shows them.
+  top5: { id: string; chars: number }[]
 }
 
 export type Ctx = { id: ModuleId; caps: Caps; shared: Shared }
@@ -54,7 +56,7 @@ export function createShared(ids: readonly ModuleId[]): Shared {
   }
   return {
     health, ledger, efforts: new Map(), runs: [], runByTool: new Map(), economy: false, windows: {}, log: [], seq: 0,
-    version: '', offMachine: false, deviceAttached: false, dirty: false, routedTotal: 0, dirs: [], crew: 0, shown: 0, paneShown: false,
+    version: '', offMachine: false, deviceAttached: false, dirty: false, routedTotal: 0, dirs: [], crew: 0, shown: 0, paneShown: false, top5: [],
   }
 }
 

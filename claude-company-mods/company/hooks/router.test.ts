@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { classifyTask, routeSpawn, suggestedAgent } from './router'
+import { classifyTask, routeSpawn } from './router'
 
 const cases: Record<string, string[]> = {
   lookup: [
@@ -84,14 +84,6 @@ test('word boundaries: near-words do not count', () => {
   expect(classifyTask('The planet')).toBe('code')
   expect(classifyTask('Insecurity')).toBe('code')
   expect(classifyTask('Adding things')).toBe('code')
-})
-
-test('suggestedAgent names the crew member of each class', () => {
-  expect(suggestedAgent('lookup')).toBe('scout')
-  expect(suggestedAgent('code')).toBe('builder')
-  expect(suggestedAgent('review')).toBe('reviewer')
-  expect(suggestedAgent('architecture')).toBe('architect')
-  expect(suggestedAgent('research')).toBe('sage')
 })
 
 const base = {

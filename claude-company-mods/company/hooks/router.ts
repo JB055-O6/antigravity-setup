@@ -51,23 +51,6 @@ export function classifyTask(text: string): TaskClass {
   return 'code'
 }
 
-export function suggestedAgent(
-  cls: TaskClass,
-): 'scout' | 'builder' | 'reviewer' | 'architect' | 'sage' {
-  switch (cls) {
-    case 'lookup':
-      return 'scout'
-    case 'code':
-      return 'builder'
-    case 'review':
-      return 'reviewer'
-    case 'architecture':
-      return 'architect'
-    case 'research':
-      return 'sage'
-  }
-}
-
 export function routeSpawn(i: {
   subagentType: string
   model?: string

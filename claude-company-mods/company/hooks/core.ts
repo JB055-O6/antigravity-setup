@@ -62,6 +62,11 @@ export function isOn(ctx: Ctx): boolean {
   return ctx.shared.health[ctx.id].on
 }
 
+// The engine refuses device calls by an agent a mod spawned, retyped or registered in such a session.
+export function offMachineWithDevice(s: Shared): boolean {
+  return s.offMachine && s.deviceAttached
+}
+
 // Errors that came out of a guard's `next`: raised beneath the module (an inner module, core,
 // an API error, an abort), so never the module's own failure.
 const fromBeneath = new WeakSet<object>()

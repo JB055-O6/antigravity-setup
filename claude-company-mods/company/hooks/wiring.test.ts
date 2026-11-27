@@ -190,7 +190,7 @@ function quiet(on: On) {
 }
 const START = { cwd: '/', surface: 'terminal', isInteractive: true } as const
 
-test('governor: main loop sonnet max -> high, opus low -> medium, opus medium untouched', async ($, on) => {
+test('governor: main loop sonnet max -> high, opus low kept (never raised), opus medium untouched', async ($, on) => {
   mock.store(on)
   const got = stepSink(on)
   await step($, { model: 'sonnet', effort: 'max' })
@@ -203,7 +203,7 @@ test('governor: main loop sonnet max -> high, opus low -> medium, opus medium un
   expect(got.map(g => [g.model, g.effort])).toEqual([
     ['sonnet', 'high'],
     ['claude-sonnet-5-5', 'high'],
-    ['opus', 'medium'],
+    ['opus', 'low'],
     ['opus', 'medium'],
     ['fable', 'high'],
     ['haiku', 'max'],

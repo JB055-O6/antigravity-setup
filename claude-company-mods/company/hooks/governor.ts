@@ -17,7 +17,8 @@ export function modelFamily(model: unknown): Family {
 const SAME: Governed = { effort: undefined, changed: false, reason: '' }
 
 // Settings that lose to another setting on both score and cost are never sent.
-export function governEffort(model: string, effort: Effort, economy: boolean): Governed {
+// The main loop (`subagent` false) is never raised: only the rules that lower apply there.
+export function governEffort(model: string, effort: Effort, economy: boolean, subagent = true): Governed {
   const keep = { ...SAME, effort }
   if (typeof effort !== 'string') return keep
   const fam = modelFamily(model)
@@ -25,7 +26,7 @@ export function governEffort(model: string, effort: Effort, economy: boolean): G
   const to = (next: string, reason: string): Governed => ({ effort: next, changed: true, reason })
 
   if (fam === 'sonnet' && (e === 'xhigh' || e === 'max')) return to('high', 'sonnet xhigh/max -> high')
-  if (fam === 'opus' && e === 'low') return to('medium', 'opus low -> medium')
+  if (fam === 'opus' && e === 'low' && subagent) return to('medium', 'opus low -> medium')
   if (fam === 'fable' && e === 'xhigh') return to('high', 'fable xhigh -> high')
   if (economy && e === 'max') {
     if (fam === 'fable') return to('high', 'economy: fable max -> high')

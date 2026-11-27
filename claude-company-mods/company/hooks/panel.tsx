@@ -73,7 +73,7 @@ export function panelBlocks(p: Panel): Block[] {
         ...p.roster.map((r) => `${r.name}: ${r.model} ${r.effort}, ${r.does}`),
         ...none(
           p.runs.slice(-5).map(
-            (r) => `${r.status === 'running' ? '▶ running' : r.status === 'done' ? '✓ done' : r.status === 'failed' ? '✗ failed' : '◆ background'} ${r.type} on ${r.model} ${r.effort}, ${r.steps} steps: ${r.task}`,
+            (r) => `${r.status === 'running' ? '▶ running' : r.status === 'done' ? '✓ done' : r.status === 'failed' ? '✗ failed' : r.status === 'ended' ? '■ ended' : '◆ background'} ${r.type} on ${r.model} ${r.effort}, ${r.steps} steps: ${r.task}`,
           ),
           'No subagent has run yet.',
         ),
@@ -122,7 +122,7 @@ export function panelText(p: Panel, placed: string): string {
     thin,
     'CREW',
     ...p.roster.map((r) => `  ${r.name.padEnd(10)}${`${r.model} · ${r.effort}`.padEnd(16)}${r.does}`),
-    ...p.runs.slice(-5).map((r) => `  ${r.status === 'running' ? '▶' : r.status === 'done' ? '✓' : r.status === 'failed' ? '✗' : '◆'} ${r.type} · ${r.model} ${r.effort} · ${r.steps} steps · ${r.task}`),
+    ...p.runs.slice(-5).map((r) => `  ${r.status === 'running' ? '▶' : r.status === 'done' ? '✓' : r.status === 'failed' ? '✗' : r.status === 'ended' ? '■' : '◆'} ${r.type} · ${r.model} ${r.effort} · ${r.steps} steps · ${r.task}`),
     thin,
     'RECENT',
     ...(recent.length ? recent.map((l) => `  #${l.n} ${l.kind.toUpperCase().padEnd(9)}${l.text}`) : ['  nothing yet']),

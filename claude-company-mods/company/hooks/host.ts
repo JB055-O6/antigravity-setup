@@ -79,24 +79,8 @@ export function showStatus($: EngineInterface, st: Shared): void {
 
 // Everything a session needs, run at start and again by /company in a live session.
 // The limits are the meter module's: it reads them at session.start.
-export async function boot($: EngineInterface, st: Shared): Promise<number> {
-  let crew = 0
-  for (const a of CREW) {
-    try {
-      await $.agent.register({
-        name: a.name,
-        description: a.description,
-        prompt: a.prompt,
-        model: a.model,
-        effort: a.effort,
-        ...(a.tools ? { tools: a.tools } : {}),
-      })
-      crew++
-    } catch {
-      // One agent failing to register must not stop the others or the session.
-    }
-  }
-  st.crew = crew
+// The crew is the router module's: it registers it first.
+export async function boot($: EngineInterface, st: Shared): Promise<void> {
   let enabled: unknown
   let loaded: string[] = []
   try {
@@ -120,9 +104,27 @@ export async function boot($: EngineInterface, st: Shared): Promise<number> {
   } catch {
     // The version is only shown.
   }
-  note(st, 'start', `company ${st.version} on: charter, router, governor, meter, diet, crew ${crew}/${CREW.length}, ${st.directives}`)
+  note(st, 'start', `company ${st.version} on: charter, router, governor, meter, diet, crew ${st.crew}/${CREW.length}, ${st.directives}`)
   showStatus($, st)
-  return crew
+}
+
+// Where the session runs. Off the person's machine: a cloud session (CLAUDE_CODE_REMOTE), an SSH
+// login (SSH_CONNECTION) or the hosted server (isHosted). A device: a client on the roster that is
+// not this process's own terminal. Each read that fails says nothing.
+// shortcut: a VM with none of these marks reads as on the machine; add its mark when the engine gives one.
+export async function readPlace($: EngineInterface, st: Shared): Promise<void> {
+  try {
+    if (/^(1|true)$/i.test((await $.env.get('CLAUDE_CODE_REMOTE')) ?? '')) st.offMachine = true
+  } catch {}
+  try {
+    if (await $.env.get('SSH_CONNECTION')) st.offMachine = true
+  } catch {}
+  try {
+    if ((await $.session.info()).isHosted) st.offMachine = true
+  } catch {}
+  try {
+    if ((await $.session.surfaces()).some((s) => s !== 'terminal')) st.deviceAttached = true
+  } catch {}
 }
 
 // Apply one reading of the rate-limit windows. Best-effort: never throws.

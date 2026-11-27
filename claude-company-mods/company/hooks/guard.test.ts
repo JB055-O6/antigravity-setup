@@ -287,6 +287,7 @@ test('register.tsx calls the module register functions in MODULE_META order', ()
   register((() => ({})) as never, {} as never)
   // The ported modules are called, in spec order among themselves; then every call keeps META order.
   expect(MODULE_CALLS.filter((id) => ['charter', 'meter', 'diet'].includes(id))).toEqual(['charter', 'meter', 'diet'])
+  expect(MODULE_CALLS.filter((id) => ['router', 'governor'].includes(id))).toEqual(['router', 'governor'])
   expect(MODULE_CALLS).toEqual(ids.filter((id) => MODULE_CALLS.includes(id)))
 })
 

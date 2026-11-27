@@ -36,7 +36,7 @@ const KEYS = [
 const ENV: Record<string, string> = { ...Object.fromEntries(KEYS.map((k) => [k, ''])), GRAPHIFY_BACKEND: 'none', GRAPHIFY_NO_AUTO_REFRESH: '1' }
 // graphify 0.9.120's answers that need care (watch.py): a refusal to write a graph that lost nodes
 // (the person's own, maybe with LLM nodes), an old graph.json it cannot read, and no code to graph.
-const KEPT = /new graph has \d+ nodes but existing|saved semantic node\(s\) are missing/
+const KEPT = /new graph has \d+ nodes but existing|saved semantic node\(s\) are missing|provenance field\(s\) stripped/
 const UNREAD = /Cannot read .*graph\.json|could not be read to verify/
 const NO_CODE = /No code files found/
 

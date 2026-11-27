@@ -15,6 +15,7 @@ const GRAPH = '/repo/graphify-out/graph.json'
 const FEWER =
   '[graphify] WARNING: new graph has 5 nodes but existing graph.json has 9. Refusing to overwrite — you may be missing chunk files from a previous session. Pass --force to override.\n'
 const SEMANTIC = '[graphify] WARNING: Refusing to overwrite — saved semantic node(s) are missing from the new graph: a, b.\n'
+const PROVENANCE = '[graphify] WARNING: Refusing to overwrite — saved semantic provenance field(s) stripped from 2 node(s): a, b.\n'
 const NOTHING = 'Nothing to update or rebuild failed — check output above.\n'
 const UNREAD = `error: Cannot read ${GRAPH} for incremental merge: Expecting value: line 2 column 1 (char 12). Delete the file and run a full rebuild.\n${NOTHING}`
 // `same`: graphify found no node or edge to change, so graph.json stays as it is.
@@ -255,6 +256,16 @@ test('graph: a graph with more nodes stays (graphify refuses the smaller one): k
 
 test('graph: saved LLM nodes the AST-only run lacks: kept too', async ($, on) => {
   const w = world(on, { files: { [GRAPH]: '{"nodes":[1]}' }, update: () => ({ exitCode: 1, stderr: SEMANTIC + NOTHING }) })
+  await $.session.start({ ...START })
+  await until(() => w.updates() === 1 && w.files[LOCK] === '')
+  await settle()
+  expect(w.notices).toContain('company · GRAPH · kept: graphify keeps the old graph; the new one lacks some of its nodes')
+  await $.session.end({ ...END })
+  expect(w.read('health').graph).toMatchObject({ on: true, fails: 0 })
+})
+
+test('graph: saved LLM provenance the AST-only run strips: kept too, not a failure', async ($, on) => {
+  const w = world(on, { files: { [GRAPH]: '{"nodes":[1]}' }, update: () => ({ exitCode: 1, stderr: PROVENANCE + NOTHING }) })
   await $.session.start({ ...START })
   await until(() => w.updates() === 1 && w.files[LOCK] === '')
   await settle()

@@ -6,6 +6,8 @@ import { ready, save } from '../persist'
 
 type Compose = Hook<'prompt.compose'>
 
+const ID = 'company:charter'
+
 export function registerCharter(on: On, ctx: Ctx): void {
   on('prompt.compose', async ($, e, next) => {
     await ready($, ctx.shared)
@@ -17,6 +19,8 @@ export function registerCharter(on: On, ctx: Ctx): void {
 async function charterCompose($: EngineInterface, e: Parameters<Compose>[1], next: Parameters<Compose>[2], ctx: Ctx) {
   // CHARTER is fixed, so the section's bytes are the same on every compose.
   const text = capText(ctx, 'section', CHARTER)
+  // Before next: audit, beneath, measures this render with it.
+  ctx.shared.ownSections[ID] = text.length
   const result = await next(e)
   try {
     added(ctx, text.length)
@@ -24,5 +28,5 @@ async function charterCompose($: EngineInterface, e: Parameters<Compose>[1], nex
   } catch {
     // Counting is best-effort.
   }
-  return { sections: [...result.sections, { id: 'company:charter', text, scope: 'session' as const }] }
+  return { sections: [...result.sections, { id: ID, text, scope: 'session' as const }] }
 }

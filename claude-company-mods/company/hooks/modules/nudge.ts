@@ -13,7 +13,7 @@ const REARM = 50
 const nudged = new WeakSet<Shared>()
 
 export function registerNudge(on: On, ctx: Ctx): void {
-  on('turn.complete', async ($, e, next) => {
+  on('turn.complete', {}, async ($, e, next) => {
     await ready($, ctx.shared)
     if (!isOn(ctx)) return next(e)
     try { const r = await nudgeComplete($, e, beneath(next), ctx); ok(ctx); return r } catch (err) { fail(ctx, err); throw err }

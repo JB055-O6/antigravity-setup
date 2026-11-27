@@ -4,7 +4,7 @@
 // Each expected miss (no rtk, a timeout, no rewrite, a refusal) runs the command as typed and
 // never throws: a throw would take bashcap's hook on the same call out with it.
 import type { EngineInterface, MatchedHook, On } from 'claude-code'
-import { acted, beneath, fail, isDeviceTool, isOn, noteOf, ok, saved, setOff, type Ctx } from '../core'
+import { acted, beneath, fail, isDeviceTool, isOn, missing, noteOf, ok, saved, setOff, truthy, type Ctx } from '../core'
 import { showStatus } from '../host'
 import { ready, save } from '../persist'
 import { acceptRewrite, inMode, shouldTry } from '../rtkrules'
@@ -22,11 +22,6 @@ const FILTERS = '.rtk/filters.toml'
 // This load's rtk: the binary the probe found (none: rtk rests), the mode, the last
 // `rtk gain` total, whether this turn has read it, and whether a rewrite ran since the last read.
 type Rt = { bin?: string; mode: RtkMode; gain?: number; gainRead: boolean; unread: boolean }
-
-// A run that could not start because the binary is gone, not because rtk failed.
-const missing = (err: unknown) => /ENOENT/.test(String(err))
-// CI=false, 0 or empty is no CI.
-const truthy = (v: string | undefined) => !!v && !/^(false|0|)$/i.test(v.trim())
 
 export function registerRtk(on: On, ctx: Ctx): void {
   // shortcut: a hot reload fires no session.start, so rtk rests until the next session; probe on the first call if reloads matter in use.

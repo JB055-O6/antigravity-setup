@@ -6,7 +6,7 @@ const IDS = ['charter', 'meter', 'router', 'governor', 'diet', 'bashcap', 'rtk',
 export type ModuleId = (typeof IDS)[number]
 // Chars (code points) a module may put into context, per shape.
 export type Caps = { section?: number; subagentPrompt?: number; toolContext?: number }
-export const OFF_REASONS = ['errors', 'not installed', 'device attached', 'cloud', 'env'] as const
+export const OFF_REASONS = ['errors', 'not installed', 'device attached', 'cloud', 'env', 'not a repo', 'refused'] as const
 export type OffReason = (typeof OFF_REASONS)[number]
 export type Health = { on: boolean; fails: number; streak: number; lastErr?: string; off?: OffReason }
 // Tokens, estimates.
@@ -44,6 +44,10 @@ export type Shared = {
   ownSections: Record<string, number>
   // rtk rewrites left out because the rewritten command would need a prompt or is denied (/company shows it).
   skippedPermission: number
+  // The code graph (graph module): a run going on, graph.json's time, graphify-out's bytes; the dashboard shows them.
+  graph: { running: boolean; builtAt?: number; bytes?: number }
+  // A tool that can change files (Write, Edit, NotebookEdit, Bash) ran since the main loop's last turn end.
+  touched: boolean
 }
 
 export type Ctx = { id: ModuleId; caps: Caps; shared: Shared }
@@ -60,8 +64,18 @@ export function createShared(ids: readonly ModuleId[]): Shared {
   }
   return {
     health, ledger, efforts: new Map(), runs: [], runByTool: new Map(), economy: false, windows: {}, log: [], seq: 0,
-    version: '', offMachine: false, deviceAttached: false, dirty: false, routedTotal: 0, dirs: [], crew: 0, shown: 0, paneShown: false, top5: [], ownSections: {}, skippedPermission: 0,
+    version: '', offMachine: false, deviceAttached: false, dirty: false, routedTotal: 0, dirs: [], crew: 0, shown: 0, paneShown: false, top5: [], ownSections: {}, skippedPermission: 0, graph: { running: false }, touched: false,
   }
+}
+
+// CI=false, 0 or empty is no CI.
+export function truthy(v: string | undefined): boolean {
+  return !!v && !/^(false|0|)$/i.test(v.trim())
+}
+
+// A run that could not start because the binary is gone, or a path that is not there.
+export function missing(err: unknown): boolean {
+  return /ENOENT/.test(String(err))
 }
 
 export function isOn(ctx: Ctx): boolean {

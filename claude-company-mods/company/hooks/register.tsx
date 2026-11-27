@@ -7,6 +7,7 @@ import { registerAudit } from './modules/audit'
 import { registerBashcap } from './modules/bashcap'
 import { registerCharter } from './modules/charter'
 import { registerDiet } from './modules/diet'
+import { registerGraph } from './modules/graph'
 import { registerGovernor } from './modules/governor'
 import { registerMeter } from './modules/meter'
 import { registerNudge } from './modules/nudge'
@@ -116,6 +117,7 @@ export const register: Register = (on, options) => {
   registerDiet(on, use('diet'))
   registerBashcap(on, use('bashcap'))
   registerRtk(on, use('rtk'))
+  registerGraph(on, use('graph'))
   registerAudit(on, use('audit'))
   registerNudge(on, use('nudge'))
 }

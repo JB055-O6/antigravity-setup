@@ -81,7 +81,7 @@ export async function ready($: EngineInterface, s: Shared): Promise<void> {
 }
 
 // Waits for `p` at most `ms`; true when the time ran out. A clock that cannot wait leaves the wait to `p`.
-async function within($: EngineInterface, p: Promise<void>, ms: number): Promise<boolean> {
+export async function within($: EngineInterface, p: Promise<void>, ms: number): Promise<boolean> {
   const stop = new AbortController()
   let late = false
   const timeout = $.clock.sleep(ms, { signal: stop.signal }).then(

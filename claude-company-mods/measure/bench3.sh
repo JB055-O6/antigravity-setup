@@ -11,7 +11,7 @@
 # each in its own work dirs; block i of repetition r goes to lane (i + (i / LANES) * (r - 1)) % LANES,
 # so the setups that share a lane change. The next repetition starts when all lanes are done.
 # Before each run, fail closed: wait while $SCRATCH/PAUSE exists, on any meter error, and while the
-# 5 h use is >= 85% or week use >= 83% (score3.py --meter); a reading older than METER_AGE s (900) gets a fresh one
+# 5 h use is >= 73% or week use >= 73% (score3.py --meter); a reading older than METER_AGE s (900) gets a fresh one
 # from a Haiku probe in safe mode (about $0.002) before any run starts. An INVALID run runs once more.
 # DRY=1 prints the plan and runs nothing.
 set -u
@@ -59,7 +59,7 @@ reading() { # the meter, with a fresh reading from a probe when the newest one i
   echo "$out"
 }
 
-meter() { # returns only on a fresh reading under 85%; every other case waits and looks again
+meter() { # returns only on a fresh reading under 73%; every other case waits and looks again
   local out s why
   while :; do
     if [ -e "$SCRATCH/PAUSE" ]; then echo "paused: $SCRATCH/PAUSE exists; remove it to go on"; sleep 60; continue; fi

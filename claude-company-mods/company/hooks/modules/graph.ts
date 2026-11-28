@@ -17,11 +17,12 @@ type Complete = Hook<'turn.complete'>
 type Lock = { pid: number; at: number; host: string; session: string }
 // This load's graph: the repo root and binary (none: the graph rests), this process as a lock
 // holder, and whether a request came during a run or met another session's lock.
-type Gr = { root?: string; bin?: string; me: Omit<Lock, 'at'>; dirty: boolean }
+// `paths`: where graphify may be off the PATH, looked up once per session (the lookup runs uv and python).
+type Gr = { root?: string; bin?: string; me: Omit<Lock, 'at'>; dirty: boolean; paths?: { session: string; list: string[] } }
 
 const GIT_MS = 5000
 const PROBE_MS = 5000
-const VERSION = /^graphify \d/
+const VERSION = (stdout: string) => /^graphify \d/.test(stdout)
 // The engine's longest run: graphify's own bound.
 const RUN_MS = 600_000
 const OUT = 'graphify-out'
@@ -87,13 +88,14 @@ export function registerGraph(on: On, ctx: Ctx): void {
   })
 }
 
-// Before the modules beneath. Never throws for a miss: a fault in setup is one failure, and the
-// session starts.
+// After the modules beneath start: the probes and the lookup off the PATH take time. Never throws
+// for a miss: a fault in setup is one failure, and the session starts.
 async function graphStart($: EngineInterface, e: Parameters<Start>[1], next: Parameters<Start>[2], ctx: Ctx, gr: Gr) {
   gr.root = gr.bin = undefined
   ctx.shared.graph.kept = false
+  const r = await next(e)
   await setup($, e.cwd, ctx, gr).catch((err: unknown) => fail(ctx, err))
-  return next(e)
+  return r
 }
 
 // CI, no repo, no graphify and each refusal turn the graph off; else the exclude file gets its
@@ -127,8 +129,10 @@ async function setup($: EngineInterface, cwd: string, ctx: Ctx, gr: Gr): Promise
   // A binary that does not start is missing; one that times out or fails otherwise is a failure.
   // Not on the PATH: the full path where uv, pipx or pip put it, used for every later run.
   const win = machine?.sysname === 'Windows_NT'
+  const session = await $.session.id().catch(() => '')
   const onPath = await firstBin($, bare('graphify', win), VERSION, PROBE_MS)
-  const found = onPath.bin !== undefined ? onPath : await firstBin($, await graphifyPaths($, win), VERSION, PROBE_MS)
+  if (onPath.bin === undefined && gr.paths?.session !== session) gr.paths = { session, list: await graphifyPaths($, win) }
+  const found = onPath.bin !== undefined ? onPath : await firstBin($, gr.paths?.list ?? [], VERSION, PROBE_MS)
   const bin = found.bin
   if (bin === undefined) {
     const broke = onPath.broke ?? found.broke
@@ -153,7 +157,7 @@ async function setup($: EngineInterface, cwd: string, ctx: Ctx, gr: Gr): Promise
   gr.me = {
     pid: Number((await $.process.hookEnv().catch(unset))?.CLAUDE_PID) || 0,
     host: machine ? `${machine.sysname} ${machine.release}` : '',
-    session: await $.session.id().catch(() => ''),
+    session,
   }
   ctx.shared.graph.builtAt = await builtAt($, out)
   gr.root = root

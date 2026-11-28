@@ -56,7 +56,7 @@ export function panelBlocks(p: Panel): Block[] {
         limits,
         p.economy
           ? 'Economy: ON. Max effort is cut to xhigh to save tokens.'
-          : 'Economy: off. It starts at 5-hour 90% or week 85%.',
+          : 'Economy: off. It starts at 5-hour 75% or week 75%.',
       ],
     },
     {

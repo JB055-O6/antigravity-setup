@@ -3,7 +3,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import { EMPTY_PANEL } from './panel'
 import { directiveState, directivesNote } from './directives'
-import { meterLine, nextEconomy, readWindows } from './governor'
+import { ECONOMY_ON, meterLine, nextEconomy, readWindows } from './governor'
 import { CREW } from './crew'
 import { isDeviceTool, note, type Shared } from './core'
 import type { PanelLine } from '../types'
@@ -152,7 +152,7 @@ export async function applyLimits($: EngineInterface, st: Shared, limits: unknow
         if (st.economy) {
           const five = w.fiveHour ?? 0
           $.ui.toast(
-            five >= 90
+            five >= ECONOMY_ON
               ? `Economy mode on: five-hour window at ${Math.round(five)}%`
               : `Economy mode on: weekly window at ${Math.round(w.week ?? 0)}%`,
           )

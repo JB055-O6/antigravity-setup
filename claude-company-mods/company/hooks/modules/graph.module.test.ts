@@ -26,13 +26,15 @@ type World = { bin?: string; uvBin?: string; pipScripts?: string; git?: boolean;
 // The plugin's own graph runs. The hooks here stand for the engine beneath it: git, graphify,
 // files, clock, notices, and $.state (read after session.end writes health and the ledger).
 function world(on: On, o: World = {}) {
+  const runs: { cmd: string; env?: Readonly<Record<string, string>> }[] = []
   mock.store(on)
   mock.env(on, o.env ?? {})
   mock.clock(on, { now: T0 })
   // The status line redraws after each graph run, an empty one too.
   let status = 0
   on('ui.status', () => (status++, { value: undefined }))
-  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  // The start beneath, in `runs` too: what runs before and after it.
+  on('session.start', (_, e) => (runs.push({ cmd: '(session.start)' }), { cwd: e.cwd }))
   on('session.end', (_, e) => ({ sessionId: e.sessionId }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
   on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false } }) as never)
@@ -55,7 +57,6 @@ function world(on: On, o: World = {}) {
   let tick = T0
   const links = new Set(o.links)
   const procs = o.procs ?? []
-  const runs: { cmd: string; env?: Readonly<Record<string, string>> }[] = []
   const res = (r: Run) => ({ value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } })
   on('process.run', async (_, e) => {
     const cmd = e.argv.join(' ')
@@ -204,6 +205,20 @@ for (const [where, o, bin] of [
     expect(w.runs.some((r) => r.cmd === 'graphify update /repo')).toBe(false)
   })
 }
+
+test('graph: the binary lookup runs after the start beneath, and once per session', async ($, on) => {
+  on('session.id', () => ({ value: 's1' }))
+  const w = world(on, { uvBin: '/home/me/.uv/bin', bin: '/home/me/.uv/bin/graphify', env: { HOME: '/home/me' } })
+  await $.session.start({ ...START })
+  await settle()
+  // A compaction starts the same session again: the folders are not looked up twice.
+  await $.session.start({ ...START, source: 'compact' } as never)
+  await settle()
+  const cmds = w.runs.map((r) => r.cmd)
+  expect(cmds.indexOf('(session.start)')).toBeLessThan(cmds.indexOf('graphify --version'))
+  expect(cmds.filter((c) => c === 'uv tool dir --bin').length).toBe(1)
+  expect(cmds.filter((c) => c === '/home/me/.uv/bin/graphify --version').length).toBe(2)
+})
 
 test('graph: graphify on no PATH, not in uv, ~/.local/bin or pip: off as not installed', async ($, on) => {
   const w = world(on, { graphify: false, uvBin: '/home/me/.uv/bin', pipScripts: '/home/me/.pip/bin', env: { HOME: '/home/me' } })

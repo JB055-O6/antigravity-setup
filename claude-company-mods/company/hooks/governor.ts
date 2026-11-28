@@ -49,12 +49,14 @@ export function readWindows(limits: readonly RateLimit[] | undefined): Windows {
   return w
 }
 
-// Hysteresis: on at 5h >= 90 or week >= 85; off again below 85 and 80.
+// Hysteresis: on when 5h or week >= 75; off again when both are below 70.
+export const ECONOMY_ON = 75
+const ECONOMY_OFF = 70
 export function nextEconomy(was: boolean, w: Windows): boolean {
   const five = w.fiveHour ?? 0
   const week = w.week ?? 0
-  if (!was) return five >= 90 || week >= 85
-  return !(five < 85 && week < 80)
+  if (!was) return five >= ECONOMY_ON || week >= ECONOMY_ON
+  return !(five < ECONOMY_OFF && week < ECONOMY_OFF)
 }
 
 export function meterLine(i: {

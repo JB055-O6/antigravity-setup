@@ -64,12 +64,12 @@ test('unknown model: only the economy max rule applies', () => {
 })
 
 test('hysteresis', () => {
-  expect(nextEconomy(false, { fiveHour: 89.9, week: 84.9 })).toBe(false)
-  expect(nextEconomy(false, { fiveHour: 90 })).toBe(true)
-  expect(nextEconomy(false, { week: 85 })).toBe(true)
-  expect(nextEconomy(true, { fiveHour: 87, week: 70 })).toBe(true)
-  expect(nextEconomy(true, { fiveHour: 10, week: 82 })).toBe(true)
-  expect(nextEconomy(true, { fiveHour: 84.9, week: 79.9 })).toBe(false)
+  expect(nextEconomy(false, { fiveHour: 74.9, week: 74.9 })).toBe(false)
+  expect(nextEconomy(false, { fiveHour: 75 })).toBe(true)
+  expect(nextEconomy(false, { week: 75 })).toBe(true)
+  expect(nextEconomy(true, { fiveHour: 72, week: 50 })).toBe(true)
+  expect(nextEconomy(true, { fiveHour: 10, week: 70 })).toBe(true)
+  expect(nextEconomy(true, { fiveHour: 69.9, week: 69.9 })).toBe(false)
   expect(nextEconomy(true, {})).toBe(false)
 })
 

@@ -17,7 +17,7 @@ export type RtkMode = 'light' | 'full'
 // The mode when COMPANY_RTK_MODE does not name one; the benchmark sets it (Task 18).
 export const DEFAULT_MODE: RtkMode = 'light'
 const RUN_MS = 2000
-const VERSION = /^rtk \d/
+const VERSION = (stdout: string) => /^rtk \d/.test(stdout)
 // The shell's answer when the Bash tool cannot find rtk: bash, zsh, cmd.
 const NOT_FOUND = /\brtk: (command )?not found|command not found: rtk|'rtk' is not recognized/
 // rtk reads a repo's own filters only after `rtk trust`, which company never runs.
@@ -106,8 +106,10 @@ async function rtkCall($: EngineInterface, e: Parameters<Bash>[1], next: Paramet
   if (cmd === null) return next(e)
   const r = await next({ ...e, command: cmd })
   // A rewrite runs rtk by its name in the Bash tool, whose PATH may lack the folder the probe found
-  // it in: rtk rests, and the command runs again as typed (every rewrite is a read-only form).
-  if (r.isError && NOT_FOUND.test(String(r.text ?? r.result))) {
+  // it in. The shell says so with or without an error (`rtk git status; pwd` ends 0). rtk rests for
+  // the rest of the session, and the command runs again as typed (every rewrite is a read-only form).
+  if (NOT_FOUND.test(shown(r))) {
+    rt.bin = undefined
     setOff(ctx, 'not installed')
     noteOf(ctx, 'off: the Bash tool cannot find rtk on its PATH')
     return next(e)
@@ -172,4 +174,11 @@ async function addGain($: EngineInterface, ctx: Ctx, rt: Rt, bin: string): Promi
   if (rt.gain !== undefined && now > rt.gain) saved(ctx, now - rt.gain)
   rt.gain = now
   rt.unread = false
+}
+
+// What a Bash result shows, read with no type: an error's text, or the record's stdout and stderr.
+function shown(r: unknown): string {
+  const v = r as { text?: unknown; result?: unknown } | undefined
+  const rec = (typeof v?.result === 'object' && v.result !== null ? v.result : {}) as { stdout?: unknown; stderr?: unknown }
+  return [v?.text, v?.result, rec.stdout, rec.stderr].filter((x): x is string => typeof x === 'string').join('\n')
 }

@@ -46,15 +46,15 @@ async function lineOf($: EngineInterface, argv: string[]): Promise<string> {
   return r?.exitCode === 0 ? (r.stdout.trim().split(/\r?\n/)[0] ?? '') : ''
 }
 
-// The first of `bins` whose `--version` matches. `broke`: a run that failed other than by a missing
-// binary (a timeout), which the caller counts as a failure when no binary answers.
-export async function firstBin($: EngineInterface, bins: readonly string[], version: RegExp, timeoutMs: number): Promise<{ bin?: string; broke?: unknown }> {
+// The first of `bins` whose `--version` output `fits`. `broke`: a run that failed other than by a
+// missing binary (a timeout), which the caller counts as a failure when no binary answers.
+export async function firstBin($: EngineInterface, bins: readonly string[], fits: (stdout: string) => boolean, timeoutMs: number): Promise<{ bin?: string; broke?: unknown }> {
   let broke: unknown
   for (const b of bins) {
     const v = await $.process.run([b, '--version'], { timeoutMs }).catch((err: unknown) => {
       if (!missing(err)) broke ??= err
     })
-    if (v && v.exitCode === 0 && version.test(v.stdout)) return { bin: b }
+    if (v && v.exitCode === 0 && fits(v.stdout)) return { bin: b }
   }
   return broke === undefined ? {} : { broke }
 }

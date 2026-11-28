@@ -97,12 +97,12 @@ test('ledger survives a reload', async ($, on) => {
   expect(health.value.charter).toEqual({ on: true, fails: 0, streak: 0 })
 })
 
-test('economy stays on after reload at 87%', async ($, on) => {
+test('economy stays on after reload at 72%', async ($, on) => {
   engine(on)
-  // This session's earlier load stored economy on; 87% alone would not start it (it starts at 90%).
-  store(on, { meter: { sessionId: 's1', economy: true, economySince: 1000, lastFiveHour: 88, lastWeek: 40 } })
+  // This session's earlier load stored economy on; 72% alone would not start it (it starts at 75%).
+  store(on, { meter: { sessionId: 's1', economy: true, economySince: 1000, lastFiveHour: 73, lastWeek: 40 } })
   on('session.id', () => ({ value: 's1' }))
-  usageAt(on, 87, 40)
+  usageAt(on, 72, 40)
   const got = stepSink(on)
   await $.session.start({ ...START })
   for await (const _ of $.turn.step({ turnId: 't', index: 0, model: 'opus', effort: 'max', messageCount: 1, agentId: 'x1' })) void _
@@ -112,9 +112,9 @@ test('economy stays on after reload at 87%', async ($, on) => {
 test('economy stored by another session is not restored', async ($, on) => {
   engine(on)
   // Every copy of company shares one store file: a record of session s0 says nothing about s1.
-  store(on, { meter: { sessionId: 's0', economy: true, economySince: 1000, lastFiveHour: 88, lastWeek: 40 } })
+  store(on, { meter: { sessionId: 's0', economy: true, economySince: 1000, lastFiveHour: 73, lastWeek: 40 } })
   on('session.id', () => ({ value: 's1' }))
-  usageAt(on, 87, 40)
+  usageAt(on, 72, 40)
   const got = stepSink(on)
   await $.session.start({ ...START })
   for await (const _ of $.turn.step({ turnId: 't', index: 0, model: 'opus', effort: 'max', messageCount: 1, agentId: 'x1' })) void _

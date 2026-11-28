@@ -317,6 +317,27 @@ test('the Bash tool cannot find rtk: the command runs again as typed, and rtk re
   expect(read('health').rtk).toMatchObject({ on: false, off: 'not installed', fails: 0 })
 })
 
+test('the Bash tool cannot find rtk, with no error (a later part ends 0): the command runs again as typed, and rtk rests for the session', async ($, on) => {
+  quiet(on)
+  const read = state(on)
+  const r = rtk(on)
+  perms(on)
+  const seen: string[] = []
+  on('tool.call', { tool: 'Bash' }, (_, e) => {
+    seen.push(e.command)
+    const stderr = e.command.startsWith('rtk ') ? 'zsh: command not found: rtk\n' : ''
+    return { result: { stdout: 'ok\n', stderr, interrupted: false } } as never
+  })
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'git status' })
+  await $.tool.call({ tool: 'Bash', command: 'git log' })
+  expect(seen).toEqual(['rtk git status', 'git status', 'git log'])
+  // The miss is kept: no more rewrites this session.
+  expect(r.rewrites()).toEqual(['git status'])
+  await $.session.end({ ...END })
+  expect(read('health').rtk).toMatchObject({ on: false, off: 'not installed', fails: 0 })
+})
+
 // `false` is not a form rtk may run any more (ruling): a read-only form that fails stands in for it.
 test('a rewritten command that fails still ends non-zero', async ($, on) => {
   quiet(on)

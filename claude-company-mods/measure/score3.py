@@ -37,8 +37,8 @@ TASKS = test_gen.tasks()
 SETUPS = ("A0", "A", "B", "C", "D", "E", "F")
 CMP = {"B": "A", "C": "A", "D": "C", "E": "C", "F": "C"}  # cost base per setup (spec 10 rule 2); A0 is a reference
 ACTED = ("agent", "cheap", "rtk", "graph")
-LIMIT = 0.85  # 5 h use at which all lanes wait for the reset (the mod's economy starts at 90%)
-WEEK_LIMIT = 0.83  # week use at which all lanes wait; economy starts at 85%, and a run can cross mid-session
+LIMIT = 0.73  # 5 h use at which all lanes wait for the reset (the mod's economy starts at 75%)
+WEEK_LIMIT = 0.73  # week use at which all lanes wait; economy starts at 75%, and a run can cross mid-session
 METER_AGE = 900  # s; an older 5 h reading is stale
 # $ per MTok: input, output, cache write 5 m, cache write 1 h, cache read. Every run checks it against costUSD.
 PRICE = {
@@ -288,7 +288,7 @@ def meter(d, now=None, max_age=METER_AGE):
     state is go, wait (seconds to the reset + 60) or stale (no reading, or none newer than max_age
     by its file's mtime; the caller takes a fresh reading or waits). It fails closed: a reading
     with no 5 h figure is stale. A week use at WEEK_LIMIT also waits, so the mod's economy mode
-    (5 h 90% or week 85%) cannot turn on in some setups and not in others.
+    (5 h or week 75%) cannot turn on in some setups and not in others.
     """
     now = time.time() if now is None else now
     files = []
@@ -319,7 +319,7 @@ def meter(d, now=None, max_age=METER_AGE):
         return "wait", math.ceil(reset - now) + 60, f"5 h use {u:.0%}"
     wk = (last.get("unifiedWindows") or {}).get("seven_day") or {}
     if isinstance(wk.get("utilization"), (int, float)) and wk["utilization"] >= WEEK_LIMIT and now < (wk.get("resetsAt") or 0):
-        return "wait", math.ceil(wk["resetsAt"] - now) + 60, f"week use {wk['utilization']:.0%} (economy starts at 85%)"
+        return "wait", math.ceil(wk["resetsAt"] - now) + 60, f"week use {wk['utilization']:.0%} (economy starts at 75%)"
     return "go", 0, f"5 h use {u:.0%}"
 
 

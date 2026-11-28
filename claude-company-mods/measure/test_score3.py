@@ -278,14 +278,15 @@ def test_meter(d):
 
     assert score3.meter(d, now)[0] == "stale"  # no reading yet: fail closed
     assert meter(0.5, now + 600) == ("go", 0)
-    assert meter(0.85, now + 600) == ("wait", 660)  # waits for the reset plus a minute
+    assert meter(0.73, now + 600) == ("wait", 660)  # waits for the reset plus a minute
+    assert meter(0.729, now + 600) == ("go", 0)  # 2% under economy's 75%
     assert meter(0.99, now - 5) == ("go", 0)  # the window reset since that reading
     assert meter(0.2, now + 600, "rejected") == ("wait", 660)
     info = {"unifiedWindows": {"five_hour": {"utilization": 0.3, "resetsAt": now + 600},
-                               "seven_day": {"utilization": 0.86, "resetsAt": now + 9000}}}
+                               "seven_day": {"utilization": 0.76, "resetsAt": now + 9000}}}
     write(d, "A-T1-1", extra=[{"type": "rate_limit_event", "rate_limit_info": info}])
-    assert score3.meter(d, now)[:2] == ("wait", 9060)  # week at 85%+ would turn economy on in B-F only
-    for week, state in ((0.83, "wait"), (0.829, "go")):  # 2% margin: a run can cross the line mid-session
+    assert score3.meter(d, now)[:2] == ("wait", 9060)  # week at 75%+ would turn economy on in B-F only
+    for week, state in ((0.73, "wait"), (0.729, "go")):  # 2% margin: a run can cross the line mid-session
         info["unifiedWindows"]["seven_day"]["utilization"] = week
         write(d, "A-T1-1", extra=[{"type": "rate_limit_event", "rate_limit_info": info}])
         assert score3.meter(d, now)[0] == state, (week, score3.meter(d, now))

@@ -1,35 +1,39 @@
 // RTK: rewrites Bash commands to their rtk form, which prints less. Safety comes first: a rewrite
 // stands only when it gives back the command as typed, every part is a read-only form (a write is
-// never rewritten, in any mode), and both forms are allowed with no prompt. Device calls are never touched.
+// never rewritten, in any mode), and the original is allowed with no prompt. The rtk form needs no
+// allow rule: a per-call check allows that one rewritten call (a deny stays). Device calls are never touched.
 // Each expected miss (no rtk, a timeout, no rewrite, a refusal) runs the command as typed and
 // never throws: a throw would take bashcap's hook on the same call out with it.
 import type { EngineInterface, MatchedHook, On } from 'claude-code'
 import { acted, beneath, fail, isDeviceTool, isOn, missing, noteOf, ok, saved, setOff, truthy, type Ctx } from '../core'
-import { showStatus } from '../host'
 import { ready, save } from '../persist'
 import { acceptRewrite, inMode, shouldTry } from '../rtkrules'
 import { bare, firstBin, rtkPaths } from '../bins'
 
 type Start = MatchedHook<'session.start', {}>
 type Bash = MatchedHook<'tool.call', { readonly tool: 'Bash' }>
+type Check = MatchedHook<'tool.check', { readonly tool: 'Bash' }>
 export type RtkMode = 'light' | 'full'
 
 // The mode when COMPANY_RTK_MODE does not name one; the benchmark sets it (Task 18).
 export const DEFAULT_MODE: RtkMode = 'light'
 const RUN_MS = 2000
 const VERSION = (stdout: string) => /^rtk \d/.test(stdout)
-// The shell's answer when the Bash tool cannot find rtk: bash, zsh, cmd.
-const NOT_FOUND = /\brtk: (command )?not found|command not found: rtk|'rtk' is not recognized/
+// The shell's answer when the Bash tool cannot find rtk (bash, zsh, sh, cmd), as a whole line.
+const NOT_FOUND = /^(?:.*: )?rtk: (?:command )?not found\r?$|^(?:.*: )?command not found: rtk\r?$|^'rtk' is not recognized as an internal or external command/m
+// The rewrites the per-call check may allow: this many at most, the oldest dropped first.
+const KEEP = 200
 // rtk reads a repo's own filters only after `rtk trust`, which company never runs.
 const FILTERS = '.rtk/filters.toml'
 
 // This load's rtk: the binary the probe found (none: rtk rests), the mode, the last
-// `rtk gain` total, whether this turn has read it, and whether a rewrite ran since the last read.
-type Rt = { bin?: string; mode: RtkMode; gain?: number; gainRead: boolean; unread: boolean }
+// `rtk gain` total, whether this turn has read it, whether a rewrite ran since the last read, and
+// this session's rewrites by tool_use_id (the exact rewritten command) not yet checked.
+type Rt = { bin?: string; mode: RtkMode; gain?: number; gainRead: boolean; unread: boolean; rewrites: Map<string, string> }
 
 export function registerRtk(on: On, ctx: Ctx): void {
   // shortcut: a hot reload fires no session.start, so rtk rests until the next session; probe on the first call if reloads matter in use.
-  const rt: Rt = { mode: DEFAULT_MODE, gainRead: false, unread: false }
+  const rt: Rt = { mode: DEFAULT_MODE, gainRead: false, unread: false, rewrites: new Map() }
   on('session.start', {}, async ($, e, next) => {
     await ready($, ctx.shared)
     if (!isOn(ctx)) return next(e)
@@ -47,6 +51,13 @@ export function registerRtk(on: On, ctx: Ctx): void {
     // No ok() here: rtkCall counts a timeout itself and goes on, and ok() would clear that streak.
     try { return await rtkCall($, e, beneath(next), ctx, rt) } catch (err) { fail(ctx, err); throw err }
   })
+  // The per-call check of a rewrite.
+  on('tool.check', { tool: 'Bash' }, async ($, e, next) => {
+    await ready($, ctx.shared)
+    if (!isOn(ctx)) return next(e)
+    // No ok() here: it would clear the streak rtkCall builds from timeouts.
+    try { return await rtkCheck(e, beneath(next), rt) } catch (err) { fail(ctx, err); throw err }
+  })
   // The last turn's rewrites: one more `rtk gain` read. Not awaited: the whole chain has 1.5 s,
   // and the host's final write has run already, so this write is best-effort.
   on('session.end', {}, ($, e, next) => {
@@ -60,6 +71,7 @@ export function registerRtk(on: On, ctx: Ctx): void {
 async function rtkStart($: EngineInterface, e: Parameters<Start>[1], next: Parameters<Start>[2], ctx: Ctx, rt: Rt) {
   rt.bin = undefined
   rt.gain = undefined
+  rt.rewrites.clear()
   const unset = () => undefined
   if (truthy(await $.env.get('CI').catch(unset)) || truthy(await $.env.get('GITHUB_ACTIONS').catch(unset))) {
     setOff(ctx, 'cloud')
@@ -104,11 +116,12 @@ async function rtkCall($: EngineInterface, e: Parameters<Bash>[1], next: Paramet
     } else fail(ctx, err)
   }
   if (cmd === null) return next(e)
+  remember(rt, e.tool_use_id!, cmd)
   const r = await next({ ...e, command: cmd })
   // A rewrite runs rtk by its name in the Bash tool, whose PATH may lack the folder the probe found
   // it in. The shell says so with or without an error (`rtk git status; pwd` ends 0). rtk rests for
   // the rest of the session, and the command runs again as typed (every rewrite is a read-only form).
-  if (NOT_FOUND.test(shown(r))) {
+  if (NOT_FOUND.test(shellSaid(r))) {
     rt.bin = undefined
     setOff(ctx, 'not installed')
     noteOf(ctx, 'off: the Bash tool cannot find rtk on its PATH')
@@ -131,8 +144,9 @@ async function rewrite($: EngineInterface, e: Parameters<Bash>[1], ctx: Ctx, rt:
   // engine types have it only where the session has attached machines. Any value but none counts.
   const host = (e as { readonly _host?: unknown })._host
   const device = (host !== undefined && host !== null && host !== '') || isDeviceTool(e.tool)
-  // Only a read-only command goes to rtk at all: a write never meets it.
-  if (rt.bin === undefined || typeof cmd !== 'string' || device || !shouldTry(cmd) || !inMode(cmd, 'full')) return null
+  // Only a read-only command goes to rtk at all: a write never meets it. A call with no id cannot
+  // get the per-call check, so it runs as typed.
+  if (rt.bin === undefined || typeof cmd !== 'string' || e.tool_use_id === undefined || device || !shouldTry(cmd) || !inMode(cmd, 'full')) return null
   // The tool's arguments as the permission check reads them.
   const { tool: _tool, tool_use_id: _id, agentId: _agent, requestMeta: _meta, ...args } = e
   // Permission first: a command that is denied or asks for a prompt stays as typed, and rtk is not run.
@@ -140,14 +154,26 @@ async function rewrite($: EngineInterface, e: Parameters<Bash>[1], ctx: Ctx, rt:
   const run = await $.process.run([rt.bin, 'rewrite', '--', cmd], { timeoutMs: RUN_MS })
   ok(ctx)
   const out = acceptRewrite(cmd, run.stdout, run.exitCode)
-  if (out === null || !inMode(out, rt.mode)) return null
-  // Core checks the rewritten call: an allow rule for the command may not cover its rtk form.
-  if (!(await allowed($, { ...args, command: out }))) {
-    ctx.shared.skippedPermission += 1
-    showStatus($, ctx.shared)
-    return null
-  }
-  return out
+  return out === null || !inMode(out, rt.mode) ? null : out
+}
+
+function remember(rt: Rt, id: string, cmd: string): void {
+  rt.rewrites.delete(id)
+  rt.rewrites.set(id, cmd)
+  if (rt.rewrites.size > KEEP) rt.rewrites.delete(rt.rewrites.keys().next().value!)
+}
+
+// Core's ask on a call this module rewrote, with the exact command it gave, becomes an allow: the
+// original ran the same check with no prompt, and every rewrite is a read-only form. A deny, an ask
+// a plugin made or the organization's ceiling, and every other call stay as they are.
+async function rtkCheck(e: Parameters<Check>[1], next: Parameters<Check>[2], rt: Rt) {
+  const r = await next(e)
+  const id = e.tool_use_id
+  const want = id === undefined ? undefined : rt.rewrites.get(id)
+  const cmd = (e.input as { command?: unknown } | undefined)?.command
+  if (r.decision !== 'ask' || r.plugin !== undefined || r.ceiling !== undefined || want === undefined || want !== cmd) return r
+  rt.rewrites.delete(id!)
+  return { decision: 'allow' as const, reason: 'company rtk: the read-only rtk form of a command that runs with no prompt' }
 }
 
 // Allowed with no prompt. A check that rejects counts as a refusal.
@@ -176,9 +202,10 @@ async function addGain($: EngineInterface, ctx: Ctx, rt: Rt, bin: string): Promi
   rt.unread = false
 }
 
-// What a Bash result shows, read with no type: an error's text, or the record's stdout and stderr.
-function shown(r: unknown): string {
-  const v = r as { text?: unknown; result?: unknown } | undefined
-  const rec = (typeof v?.result === 'object' && v.result !== null ? v.result : {}) as { stdout?: unknown; stderr?: unknown }
-  return [v?.text, v?.result, rec.stdout, rec.stderr].filter((x): x is string => typeof x === 'string').join('\n')
+// What the shell said about a Bash run, read with no type: stderr, and an error's text. Never
+// stdout: a command can print the shell's words there (`grep -rn "command not found: rtk"`).
+function shellSaid(r: unknown): string {
+  const v = r as { isError?: unknown; text?: unknown; result?: unknown } | undefined
+  const rec = (typeof v?.result === 'object' && v.result !== null ? v.result : {}) as { stderr?: unknown }
+  return [rec.stderr, ...(v?.isError ? [v.text, v.result] : [])].filter((x): x is string => typeof x === 'string').join('\n')
 }

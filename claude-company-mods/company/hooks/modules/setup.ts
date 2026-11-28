@@ -1,8 +1,8 @@
 // Setup: once per machine, one engine Yes/No box at session start. Yes installs RTK and graphify
-// (pinned), adds allow rules for the RTK form of the read-only commands that already run with no
-// prompt, and makes Company load first. It edits the person's own settings.json: it reads and
-// checks the file first, writes a backup, merges, and records each addition, so undo takes back
-// only those. Each expected miss (a dismissed box, no network, a hash mismatch, invalid JSON) ends
+// (pinned), makes Company load first and sets ponytail's mode to ultra. It adds no allow rules: the
+// rtk module allows each rewrite of its own per call (a per-call check). It edits the person's own
+// settings.json: it reads and checks the file first, writes a backup, merges, and records each
+// addition, so undo takes back only those. Each expected miss (a dismissed box, no network, a hash mismatch, invalid JSON) ends
 // in one notice and never throws: a throw would take the other company hooks on session.start with it.
 import type { EngineInterface, MatchedHook, On } from 'claude-code'
 import { deleteArgv } from '../bashcut'
@@ -11,12 +11,11 @@ import { beneath, cutCodePoints, fail, isOn, missing, ok, redact, truthy, type C
 import { showStatus } from '../host'
 import { ready, within } from '../persist'
 import { GRAPHIFY, RTK } from '../pins'
-import { FORMS } from '../rtkrules'
 
 type Start = MatchedHook<'session.start', {}>
-// What setup added: the rules, the plugin entry, the lists and the env it made (undo keeps what the
-// person had), and ponytail's mode before setup (`was` absent: no value).
-type Added = { allow: string[]; plugins: string[]; made: string[]; ponytail?: { was?: unknown } }
+// What setup added: the plugin entry, the list and the env it made (undo keeps what the person had),
+// and ponytail's mode before setup (`was` absent: no value).
+type Added = { plugins: string[]; made: string[]; ponytail?: { was?: unknown } }
 // Where setup works on this machine. `key` names the RTK build (`linux-x64`); none for an unknown machine.
 // `settings` is under CLAUDE_CONFIG_DIR when it is set, as the engine reads it.
 type Place = { win: boolean; key?: string; sep: string; bin: string; settings: string; dl: string }
@@ -24,7 +23,7 @@ type Place = { win: boolean; key?: string; sep: string; bin: string; settings: s
 type End = { reason?: string; text: string }
 
 export const QUESTION =
-  'Company can set up this machine. It installs RTK and graphify, and loads Company first. It lets RTK shrink read-only commands you already allow, and sets ponytail to ultra. Set it up now?'
+  'Company can set up this machine. It installs RTK and graphify, and loads Company first. It sets ponytail to ultra. It changes your settings.json and keeps a copy. Set it up now?'
 export const COMPANY = 'company@synced'
 // ponytail (5.3.3) reads this env first: its own band and texts then say ultra, as the leader does.
 export const PONYTAIL = 'PONYTAIL_DEFAULT_MODE'
@@ -32,8 +31,10 @@ const BASE = `https://github.com/rtk-ai/rtk/releases/download/${RTK.version}`
 const GRAPHIFY_VERSION = GRAPHIFY.split('==')[1]
 const GRAPHIFY_RE = new RegExp(`^graphify ${GRAPHIFY_VERSION?.replace(/\./g, '\\.')}(\\s|$)`)
 const GRAPHIFY_FITS = (stdout: string) => GRAPHIFY_RE.test(stdout)
-// The longest the start waits for the setup flag; then it is unknown, and no box shows.
+// The longest the start waits for the setup flag; then no box shows, and a late answer only fills the dashboard.
 const FLAG_MS = 1500
+// The name of a run's own download folder.
+const RUN_DIR = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // A run another session started this long ago or less is still going on.
 const RUN_FOR_MS = 15 * 60_000
 const RUN_MS = 30_000
@@ -41,29 +42,7 @@ const DL_MS = 300_000
 const PIP_MS = 600_000
 // The most bytes one $.fs.read gives.
 const CHUNK = 4 * 1024 * 1024
-// A command nobody allows: when it runs with no prompt, the mode allows every command, and only an
-// allow that a rule in the person's own settings.json gave counts.
-const CANARY = 'company-setup-probe'
 const AGAIN = 'Select Set up in the Company pane to try again.'
-
-// Forms with a flag that writes a file, deletes or runs a program. The RTK rule covers every flag, so
-// the original must run with no prompt with such a flag too (a rule of the person's), not only as a read.
-const WRITE_PROBE: Record<string, string> = {
-  'git log': 'git log --output=x',
-  'git diff': 'git diff --output=x',
-  'git show': 'git show --output=x',
-  'git stash list': 'git stash list --output=x',
-  'git branch': 'git branch -D x',
-  find: 'find . -delete',
-  rg: 'rg --pre sh x',
-}
-
-// Each form the rewriter may give (asTyped forms never get an rtk form): a sample of the command as
-// typed, and the allow rule for its RTK form. Never `Bash(rtk:*)`, never a write form.
-export const MIRRORS: readonly { sample: string; probe?: string; rule: string }[] = FORMS.filter((f) => !f.asTyped).map((f) => {
-  const sample = f.words.join(' ')
-  return { sample, probe: WRITE_PROBE[sample], rule: `Bash(rtk ${sample}:*)` }
-})
 
 // rtk 1.2.1 or newer: setup never puts the pinned build over a newer one.
 export function rtkFits(stdout: string): boolean {
@@ -101,13 +80,26 @@ async function setupStart($: EngineInterface, e: Parameters<Start>[1], next: Par
 // A store that does not answer within FLAG_MS, or cannot be read, is unknown: no box. No box while a
 // run goes on here or in another session.
 async function boxOnce($: EngineInterface, st: Shared, interactive: boolean): Promise<void> {
-  let stored: unknown = null
-  const late = await within($, $.store.get('setup').then((v) => void (stored = v), () => {}), FLAG_MS)
-  if (late || stored === null) return
-  const flag = readFlag(stored)
-  if (flag) st.setup = { ...flag, running: st.setup.running }
-  if (flag || !interactive || st.offMachine || st.setup.running || (await ci($)) || (await runElsewhere($))) return
+  const before = st.setup
+  let late = false
+  let answer: { v: unknown } | undefined
+  const read = $.store.get('setup').then(
+    (v) => {
+      answer = { v }
+      loadFlag(st, v, before)
+      if (late) showStatus($, st)
+    },
+    () => {},
+  )
+  late = await within($, read, FLAG_MS)
+  if (late || !answer || readFlag(answer.v) || !interactive || st.offMachine || st.setup.running || (await ci($)) || (await runElsewhere($))) return
   await offer($, st)
+}
+
+// The stored flag into the dashboard state, unless a run started or ended since `before`.
+export function loadFlag(st: Shared, v: unknown, before: Shared['setup']): void {
+  const flag = readFlag(v)
+  if (flag && st.setup === before && !before.running) st.setup = { ...flag, running: false }
 }
 
 // The time a run of this machine's setup started, in any session (every session shares the store),
@@ -179,8 +171,8 @@ async function setUp($: EngineInterface): Promise<End> {
   const p = await place($)
   if (!p) return { reason: 'no home folder', text: 'Setup stopped: Company cannot find your home folder. Company made no changes.' }
   const was = await readText($, p.settings)
-  const user = parse(was)
-  if (typeof user === 'string') return refused(p, user)
+  const bad = parse(was)
+  if (typeof bad === 'string') return refused(p, bad)
   const rtk = await installRtk($, p)
   if (typeof rtk !== 'string') return rtk
   const graph = await installGraphify($, p)
@@ -188,15 +180,15 @@ async function setUp($: EngineInterface): Promise<End> {
   // its name in Bash, and your own terminal needs the PATH too.
   const away = [...new Set([rtk, typeof graph === 'string' ? graph : ''].filter((b) => /[\\/]/.test(b)).map(folderOf))]
   const path = away.length ? ` Add ${away.join(' and ')} to your PATH. Then start a new session.` : ''
-  const merged = mergeSettings(was, await mirrorRules($, listOf(user.permissions, 'allow')))
+  const merged = mergeSettings(was)
   if ('refuse' in merged) return refused(p, merged.refuse)
   const saved = await writeSettings($, p.settings, merged)
   if (saved === 'changed') {
     return { reason: 'settings.json changed during setup', text: `Setup stopped: ${p.settings} changed while setup ran. Company changed no settings. ${AGAIN}` }
   }
-  const n = merged.added.allow.length
   const done =
-    `Company added ${n} RTK allow ${n === 1 ? 'rule' : 'rules'} to ${p.settings} and loads first from the next session.` +
+    (merged.added.plugins.length || merged.added.ponytail ? `Company changed ${p.settings}.` : `${p.settings} needs no change.`) +
+    (merged.added.plugins.length ? ' Company loads first from the next session.' : '') +
     (merged.added.ponytail ? ` It sets ${PONYTAIL} to ultra.` : '') +
     (saved.bak ? ` A copy of your settings from ${saved.since} is in ${saved.bak}.` : '')
   if (typeof graph !== 'string') return { reason: graph.reason, text: `RTK ${RTK.version.slice(1)} is on this machine.${path} ${done} ${graph.text}` }
@@ -244,6 +236,7 @@ async function hasRtk($: EngineInterface, bins: readonly string[]): Promise<stri
 // Downloads the pinned build, checks its SHA-256 before it unpacks, and puts the binary in the bin
 // folder. Returns how RTK runs (its name or full path), or why not.
 async function installRtk($: EngineInterface, p: Place): Promise<string | End> {
+  await sweep($, p)
   const exe = p.win ? 'rtk.exe' : 'rtk'
   const path = `${p.bin}${p.sep}${exe}`
   const had = await hasRtk($, [...bare('rtk', p.win), path])
@@ -273,6 +266,15 @@ async function installRtk($: EngineInterface, p: Place): Promise<string | End> {
     await run($, deleteArgv(tmp, p.win ? 'windows' : undefined), RUN_MS)
   }
   return (await hasRtk($, [...bare('rtk', p.win), path])) ?? broken
+}
+
+// Deletes the download folders of runs that never cleaned up (a session killed mid-run), once they
+// are RUN_FOR_MS old: a younger one may be another session's run that still goes on.
+async function sweep($: EngineInterface, p: Place): Promise<void> {
+  const t = await now($)
+  for (const d of await $.fs.list(p.dl).catch(() => [])) {
+    if (d.kind === 'dir' && !d.isLink && RUN_DIR.test(d.name) && t - d.mtimeMs >= RUN_FOR_MS) await run($, deleteArgv(`${p.dl}${p.sep}${d.name}`, p.win ? 'windows' : undefined), RUN_MS)
+  }
 }
 
 // The file's SHA-256 in hex, read in ranges the engine allows.
@@ -312,35 +314,11 @@ async function installGraphify($: EngineInterface, p: Place): Promise<string | E
   }
 }
 
-// The rules to add: the mirror of each form whose original runs with no prompt in every project. A
-// rule counts only when it is in the person's own settings.json (`mine`): a project, local,
-// `--settings` or policy rule holds for less. An allow with no rule counts only for the read (the
-// engine's own read-only check) and never in a mode that allows every command: a write form allowed
-// with no rule is a mode's or a plugin's allow.
-// shortcut: a plugin's allow of a read looks like the engine's own (Company's query skips only Company's hooks); upgrade when a verdict names its source.
-async function mirrorRules($: EngineInterface, mine: readonly string[]): Promise<string[]> {
-  const all = await verdict($, CANARY)
-  const counts = (v: { decision?: unknown; rule?: unknown }, write: boolean) =>
-    v.decision === 'allow' && (typeof v.rule === 'string' ? mine.includes(v.rule) : v.rule === undefined && !write && all.decision !== 'allow')
-  const out: string[] = []
-  for (const m of MIRRORS) if (counts(await verdict($, m.sample), false) && (m.probe === undefined || counts(await verdict($, m.probe), true))) out.push(m.rule)
-  return out
-}
-
-// The engine's verdict for a Bash command, read with no type: its fields differ per engine. A check
-// that rejects is no allow.
-async function verdict($: EngineInterface, command: string): Promise<{ decision?: unknown; rule?: unknown }> {
-  return $.tool.check({ tool: 'Bash', input: { command } }).then(
-    (v) => v as { decision?: unknown; rule?: unknown },
-    () => ({}),
-  )
-}
-
 // First the file is read again: a change since the first read (the person's, another session's) is
 // never written over ('changed'). Then the backup (only when there is none yet: an older one holds the
 // settings from before Company), the record of the additions, and the file. `since`: the backup's date.
 async function writeSettings($: EngineInterface, path: string, merged: { text: string; was?: string; added: Added }): Promise<{ bak?: string; since?: string } | 'changed'> {
-  if (!merged.added.allow.length && !merged.added.plugins.length && !merged.added.ponytail) return {}
+  if (!merged.added.plugins.length && !merged.added.ponytail) return {}
   if ((await readText($, path)) !== merged.was) return 'changed'
   const bak = `${path}.company-bak`
   let since: string | undefined
@@ -353,10 +331,9 @@ async function writeSettings($: EngineInterface, path: string, merged: { text: s
     since = new Date(old ? old.mtimeMs : await now($)).toISOString().slice(0, 10)
   }
   const rec = await $.store.get('setupAdded')
-  // The first record of ponytail's mode stays: it holds the value from before any setup.
-  const ponytail = isRecord(rec) && isRecord(rec.ponytail) ? rec.ponytail : merged.added.ponytail
+  // ponytail's mode just before this run: undo gives back what the person had last.
+  const ponytail = merged.added.ponytail ?? (isRecord(rec) && isRecord(rec.ponytail) ? rec.ponytail : undefined)
   await $.store.set('setupAdded', {
-    allow: [...new Set([...listOf(rec, 'allow'), ...merged.added.allow])],
     plugins: [...new Set([...listOf(rec, 'plugins'), ...merged.added.plugins])],
     made: [...new Set([...listOf(rec, 'made'), ...merged.added.made])],
     ...(ponytail ? { ponytail } : {}),
@@ -374,7 +351,7 @@ export async function undoSetup($: EngineInterface, st: Shared): Promise<void> {
     const p = await place($)
     if (!p) return tell($, 'Undo stopped: Company cannot find your home folder. Company made no changes.')
     const rec = await $.store.get('setupAdded')
-    const added = { allow: listOf(rec, 'allow'), plugins: listOf(rec, 'plugins'), made: listOf(rec, 'made'), ...(isRecord(rec) && isRecord(rec.ponytail) ? { ponytail: rec.ponytail } : {}) }
+    const added = { plugins: listOf(rec, 'plugins'), made: listOf(rec, 'made'), ...(isRecord(rec) && isRecord(rec.ponytail) ? { ponytail: rec.ponytail } : {}) }
     const now = await readText($, p.settings)
     const out = now === undefined ? { text: '', removed: 0 } : unmergeSettings(now, added)
     if ('refuse' in out) return tell($, `Undo stopped: ${p.settings} ${out.refuse}. Company made no changes. Correct the file. Then select Undo setup again.`)
@@ -391,28 +368,19 @@ export async function undoSetup($: EngineInterface, st: Shared): Promise<void> {
   }
 }
 
-// The settings with the rules, Company at the front of prependPlugins (the person's order stays) and
-// ponytail's mode ultra, what was added, and the old text; or why not.
-export function mergeSettings(text: string | undefined, allow: readonly string[]): { text: string; was?: string; added: Added } | { refuse: string } {
+// The settings with Company at the front of prependPlugins (the person's order stays) and ponytail's
+// mode ultra, what was added, and the old text; or why not.
+export function mergeSettings(text: string | undefined): { text: string; was?: string; added: Added } | { refuse: string } {
   const s = parse(text)
   if (typeof s === 'string') return { refuse: s }
-  const made = [
-    ...(s.permissions === undefined ? ['permissions'] : []),
-    ...(isRecord(s.permissions) && s.permissions.allow !== undefined ? [] : ['allow']),
-    ...(s.prependPlugins === undefined ? ['prependPlugins'] : []),
-    ...(s.env === undefined ? ['env'] : []),
-  ]
-  const perms = (s.permissions ??= {}) as Record<string, unknown>
-  const have = (perms.allow ??= []) as unknown[]
-  const add = [...new Set(allow)].filter((r) => !have.includes(r))
-  have.push(...add)
+  const made = [...(s.prependPlugins === undefined ? ['prependPlugins'] : []), ...(s.env === undefined ? ['env'] : [])]
   const plugins = (s.prependPlugins ??= []) as unknown[]
   const first = plugins.includes(COMPANY) ? [] : [COMPANY]
   plugins.unshift(...first)
   const env = (s.env ??= {}) as Record<string, unknown>
   const ponytail = env[PONYTAIL] === 'ultra' ? undefined : PONYTAIL in env ? { was: env[PONYTAIL] } : {}
   env[PONYTAIL] = 'ultra'
-  return { text: `${JSON.stringify(s, null, 2)}\n`, ...(text !== undefined ? { was: text } : {}), added: { allow: add, plugins: first, made, ...(ponytail ? { ponytail } : {}) } }
+  return { text: `${JSON.stringify(s, null, 2)}\n`, ...(text !== undefined ? { was: text } : {}), added: { plugins: first, made, ...(ponytail ? { ponytail } : {}) } }
 }
 
 // The settings with the recorded additions taken out, and how many. A list setup made goes when it
@@ -425,12 +393,6 @@ export function unmergeSettings(text: string, added: Added): { text: string; rem
     const keep = list.filter((v) => !(typeof v === 'string' && gone.includes(v)))
     removed += list.length - keep.length
     return keep
-  }
-  const perms = s.permissions as Record<string, unknown> | undefined
-  if (perms && Array.isArray(perms.allow)) {
-    perms.allow = drop(perms.allow, added.allow)
-    if (!(perms.allow as unknown[]).length && added.made.includes('allow')) delete perms.allow
-    if (!Object.keys(perms).length && added.made.includes('permissions')) delete s.permissions
   }
   if (Array.isArray(s.prependPlugins)) {
     s.prependPlugins = drop(s.prependPlugins, added.plugins)
@@ -456,8 +418,6 @@ function parse(text: string | undefined): Record<string, unknown> | string {
     return 'is not valid JSON'
   }
   if (!isRecord(v)) return 'is not a JSON object'
-  const perms = v.permissions
-  if (perms !== undefined && (!isRecord(perms) || (perms.allow !== undefined && !Array.isArray(perms.allow)))) return 'has a permissions.allow that is not a list'
   if (v.prependPlugins !== undefined && !Array.isArray(v.prependPlugins)) return 'has a prependPlugins that is not a list'
   if (v.env !== undefined && !isRecord(v.env)) return 'has an env that is not an object'
   return v
@@ -468,7 +428,7 @@ function readFlag(v: unknown): { state: SetupState; reason?: string } | undefine
   return { state: v.state, ...(typeof v.reason === 'string' ? { reason: v.reason } : {}) }
 }
 
-function listOf(rec: unknown, key: 'allow' | 'plugins' | 'made'): string[] {
+function listOf(rec: unknown, key: 'plugins' | 'made'): string[] {
   const v = isRecord(rec) ? rec[key] : undefined
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
 }

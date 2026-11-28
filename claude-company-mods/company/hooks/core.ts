@@ -43,7 +43,6 @@ export type Shared = {
   // Sections a module above audit adds to this render, in chars by id: audit sits beneath and never sees them.
   ownSections: Record<string, number>
   // rtk rewrites left out because the rewritten command would need a prompt or is denied (/company shows it).
-  skippedPermission: number
   // The code graph (graph module): a run going on, graph.json's time, graphify-out's bytes, and
   // whether graphify kept the old graph (no more updates this session); the dashboard shows them.
   graph: { running: boolean; builtAt?: number; bytes?: number; kept?: boolean }
@@ -69,7 +68,7 @@ export function createShared(ids: readonly ModuleId[]): Shared {
   }
   return {
     health, ledger, efforts: new Map(), runs: [], runByTool: new Map(), economy: false, windows: {}, log: [], seq: 0,
-    version: '', offMachine: false, deviceAttached: false, dirty: false, routedTotal: 0, dirs: [], crew: 0, shown: 0, paneShown: false, top5: [], ownSections: {}, skippedPermission: 0, graph: { running: false }, touched: false, setup: { state: 'not asked', running: false },
+    version: '', offMachine: false, deviceAttached: false, dirty: false, routedTotal: 0, dirs: [], crew: 0, shown: 0, paneShown: false, top5: [], ownSections: {}, graph: { running: false }, touched: false, setup: { state: 'not asked', running: false },
   }
 }
 

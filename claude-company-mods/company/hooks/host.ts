@@ -69,7 +69,6 @@ export function showStatus($: EngineInterface, st: Shared): void {
     routed: st.routedTotal,
     governed: st.ledger.governor.acted,
     diet: st.ledger.diet.acted,
-    rtkSkipped: st.skippedPermission,
     log: st.log,
     runs: st.runs,
   })).catch(() => {})

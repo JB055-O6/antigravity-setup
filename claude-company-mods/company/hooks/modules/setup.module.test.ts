@@ -1,8 +1,8 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { createShared } from '../core'
-import { FORMS } from '../rtkrules'
-import { COMPANY, MIRRORS, PONYTAIL, QUESTION, digestHex, mergeSettings, rtkFits, setupStatus, unmergeSettings } from './setup'
+import { RTK } from '../pins'
+import { COMPANY, PONYTAIL, QUESTION, digestHex, loadFlag, mergeSettings, rtkFits, runSetup, setupStatus, unmergeSettings } from './setup'
 
 const START = { cwd: '/repo', surface: 'terminal', isInteractive: true } as const
 const SETTINGS = '/home/me/.claude/settings.json'
@@ -14,7 +14,6 @@ const RUN_DIR = /^\/home\/me\/\.claude\/company-setup\/[0-9a-f-]{36}$/
 const ASSET = 'rtk-x86_64-unknown-linux-musl.tar.gz'
 const ENOENT = (what: string) => ({ deny: `spawn ${what} ENOENT` }) as never
 
-type Verdict = { decision: 'allow' | 'ask' | 'deny'; rule?: string }
 type World = {
   env?: Record<string, string>
   machine?: { sysname: string; machine: string }
@@ -34,9 +33,12 @@ type World = {
   graphifyAt?: string
   python?: string
   pipScripts?: string
-  check?: (cmd: string) => Verdict
   // 'hang': the store never answers the setup flag.
   store?: Record<string, unknown> | 'broken' | 'hang'
+  // The store answers the setup flag only once this settles.
+  flagWait?: Promise<void>
+  // Earlier runs' folders under the download folder: name -> mtimeMs.
+  runDirs?: Record<string, number>
 }
 
 // The engine beneath the plugin: env, machine, store, files, processes, permission checks, the box.
@@ -51,6 +53,7 @@ function world(on: On, o: World = {}) {
   on('store.get', (_, e) => {
     if (e.key === 'setup') order.push('flag')
     if (o.store === 'hang' && e.key === 'setup') return new Promise(() => {}) as never
+    if (o.flagWait && e.key === 'setup') return o.flagWait.then(() => ({ value: held[e.key] })) as never
     return o.store === 'broken' ? ({ deny: 'store unreadable' } as never) : { value: held[e.key] }
   })
   on('store.set', (_, e) => ((held[e.key] = e.value), { value: undefined }))
@@ -69,12 +72,6 @@ function world(on: On, o: World = {}) {
     if (o.ask === 'hang') return new Promise(() => {}) as never
     return { result: { questions: qs, answers: { [qs[0]!.question]: o.ask ?? 'Yes' } } } as never
   })
-  const checked: string[] = []
-  on('tool.check', { tool: 'Bash' }, (_, e) => {
-    const c = (e.input as { command: string }).command
-    if (e.tool_use_id === undefined) checked.push(c)
-    return (o.check ?? (() => ({ decision: 'ask' })))(c) as never
-  })
   const files: Record<string, string> = { ...o.files }
   const writes: string[] = []
   const reads: { path: string; as: string; offset?: number; length?: number }[] = []
@@ -91,6 +88,9 @@ function world(on: On, o: World = {}) {
     return { value: { base64: btoa(all.slice(at, at + (e.length ?? all.length))) } }
   })
   on('fs.stat', (_, e) => (norm(e.path) in files ? { value: { kind: 'file', size: files[norm(e.path)]!.length, mtimeMs: 0, isLink: false } } : enoent(e.path)))
+  on('fs.list', (_, e) =>
+    norm(e.path) === DL && o.runDirs ? { value: Object.entries(o.runDirs).map(([name, mtimeMs]) => ({ name, kind: 'dir', size: 0, mtimeMs, isLink: false })) } : enoent(e.path),
+  )
   on('fs.exists', (_, e) => ({ value: norm(e.path) in files || Object.keys(files).some((f) => f.startsWith(`${norm(e.path)}/`)) }))
   on('fs.write', (_, e) => {
     files[norm(e.path)] = e.text
@@ -118,7 +118,7 @@ function world(on: On, o: World = {}) {
       return res()
     }
     if (cmd === 'tar') return (rtk = true), res()
-    if (cmd === 'mkdir' || cmd === 'rm' || cmd === 'cmd') return res()
+    if (cmd === 'mkdir' || cmd === 'rm' || cmd === 'cmd' || cmd === 'mv') return res()
     if ((cmd === 'uv' || cmd === 'pipx') && o.edit !== undefined) files[SETTINGS] = o.edit
     if (cmd === 'uv' || cmd === 'pipx') return o.graphify === cmd ? ((graphify = true), res()) : ENOENT(cmd)
     if (cmd === 'python3' || cmd === 'python') {
@@ -128,7 +128,7 @@ function world(on: On, o: World = {}) {
     return ENOENT(cmd)
   })
   const ran = (cmd: string) => runs.filter((a) => a[0] === cmd)
-  return { held, files, writes, reads, runs, ran, notices, asked, checked, order }
+  return { held, files, writes, reads, runs, ran, notices, asked, order }
 }
 
 // Lets the box and the setup it starts run to their end. The hash is the engine's crypto, which
@@ -140,28 +140,24 @@ async function settle() {
   }
 }
 
-// The engine allows git status (its own read-only check) and find, its write form too (a rule in
-// the person's settings.json), and git log only as a read: its write form asks.
-const ALLOWS = (c: string): Verdict =>
-  c === 'git status' || c === 'git log' ? { decision: 'allow' } : c === 'find' || c === 'find . -delete' ? { decision: 'allow', rule: 'Bash(find:*)' } : { decision: 'ask' }
 const OLD = '{\n  "model": "opus",\n  "permissions": { "allow": ["Bash(npm test:*)", "Bash(find:*)"], "deny": ["Bash(git push:*)"] },\n  "prependPlugins": ["mine@local"]\n}\n'
-const MINE = '{"permissions":{"allow":["Bash(find:*)"]}}'
 
-test('Yes: one box at start, rules for allowed originals only, Company first, a backup and a record', async ($, on) => {
-  const w = world(on, { rtk: true, graphify: 'present', files: { [SETTINGS]: OLD }, check: ALLOWS })
+test('Yes: one box at start, Company first, ponytail ultra, no allow rule, a backup and a record', async ($, on) => {
+  const w = world(on, { rtk: true, graphify: 'present', files: { [SETTINGS]: OLD } })
   await $.session.start({ ...START })
   await settle()
   expect(w.asked).toEqual([[{ question: QUESTION, header: expect.any(String), options: [{ label: 'Yes', description: '' }, { label: 'Not now', description: '' }], multiSelect: false }]])
   const s = JSON.parse(w.files[SETTINGS]!)
-  // The person's keys, rules and order stay; only the mirrors are added, and Company goes first.
+  // The person's keys, rules and order stay; Company goes first. No rule at all for rtk: the rtk
+  // module checks each rewrite per call.
   expect(s.model).toBe('opus')
-  expect(s.permissions.deny).toEqual(['Bash(git push:*)'])
-  expect(s.permissions.allow).toEqual(['Bash(npm test:*)', 'Bash(find:*)', 'Bash(rtk git status:*)', 'Bash(rtk find:*)'])
+  expect(s.permissions).toEqual(JSON.parse(OLD).permissions)
+  expect(w.files[SETTINGS]).not.toContain('Bash(rtk')
   expect(s.prependPlugins).toEqual([COMPANY, 'mine@local'])
   expect(s.env).toEqual({ [PONYTAIL]: 'ultra' })
   expect(w.files[BAK]).toBe(OLD)
   expect(w.writes).toEqual([BAK, SETTINGS])
-  expect(w.held.setupAdded).toEqual({ allow: ['Bash(rtk git status:*)', 'Bash(rtk find:*)'], plugins: [COMPANY], made: ['env'], ponytail: {} })
+  expect(w.held.setupAdded).toEqual({ plugins: [COMPANY], made: ['env'], ponytail: {} })
   expect(w.held.setup).toEqual({ state: 'done' })
   expect(w.notices.length).toBe(1)
   expect(w.notices[0]).toContain('Setup is done.')
@@ -176,43 +172,6 @@ test('Yes: one box at start, rules for allowed originals only, Company first, a 
   await $.session.start({ ...START })
   await settle()
   expect(w.asked.length).toBe(1)
-})
-
-test('mirrors: each added rule is the RTK form of an original that runs with no prompt; never rtk:* or a write', async ($, on) => {
-  const w = world(on, { rtk: true, graphify: 'present', files: { [SETTINGS]: MINE }, check: ALLOWS })
-  await $.session.start({ ...START })
-  await settle()
-  const added = (w.held.setupAdded as { allow: string[] }).allow
-  const allowed = MIRRORS.filter((m) => ALLOWS(m.sample).decision === 'allow' && (!m.probe || ALLOWS(m.probe).decision === 'allow')).map((m) => m.rule)
-  expect(added).toEqual(allowed)
-  expect(added).not.toContain('Bash(rtk:*)')
-  // git log runs with no prompt only as a read, so its write form decides: no mirror.
-  expect(added).not.toContain('Bash(rtk git log:*)')
-  expect(w.checked).toContain('git log --output=x')
-  // Every mirror is a read-only form rtk runs, as a narrow prefix rule; no rtk read (cat stays as typed).
-  const forms = FORMS.filter((f) => !f.asTyped).map((f) => `Bash(rtk ${f.words.join(' ')}:*)`)
-  expect(MIRRORS.map((m) => m.rule)).toEqual(forms)
-  expect(MIRRORS.map((m) => m.rule)).not.toContain('Bash(rtk read:*)')
-  expect(MIRRORS.some((m) => /push|commit|checkout|reset|rm |mv |install|^Bash\(rtk:/.test(m.rule))).toBe(false)
-})
-
-test('a mode that allows every command: only allows a settings rule gave count', async ($, on) => {
-  // bypassPermissions: everything allowed with no rule; the person's own find rule still counts.
-  const w = world(on, { rtk: true, graphify: 'present', files: { [SETTINGS]: MINE }, check: (c) => (c.startsWith('find') ? { decision: 'allow', rule: 'Bash(find:*)' } : { decision: 'allow' }) })
-  await $.session.start({ ...START })
-  await settle()
-  expect((w.held.setupAdded as { allow: string[] }).allow).toEqual(['Bash(rtk find:*)'])
-})
-
-test('mirror scope: a rule from outside the person\'s settings.json, or a write form allowed with no rule, never adds a mirror', async ($, on) => {
-  // git status: a project rule; find: allowed with no rule, its delete form too (a plugin or a mode).
-  // ls: the engine's own read-only check, the one global allow with no rule.
-  const check = (c: string): Verdict =>
-    c === 'git status' ? { decision: 'allow', rule: 'Bash(git status)' } : c === 'find' || c === 'find . -delete' || c === 'ls' ? { decision: 'allow' } : { decision: 'ask' }
-  const w = world(on, { rtk: true, graphify: 'present', files: { [SETTINGS]: MINE }, check })
-  await $.session.start({ ...START })
-  await settle()
-  expect((w.held.setupAdded as { allow: string[] }).allow).toEqual(['Bash(rtk ls:*)'])
 })
 
 test('Not now: the flag is declined, nothing runs or changes, and the box does not come back', async ($, on) => {
@@ -267,7 +226,7 @@ for (const [name, o, start] of NEVER) {
 }
 
 test('invalid settings JSON: one notice, and nothing installed or written', async ($, on) => {
-  const w = world(on, { files: { [SETTINGS]: '{ "model": "opus", }' }, check: ALLOWS })
+  const w = world(on, { files: { [SETTINGS]: '{ "model": "opus", }' } })
   await $.session.start({ ...START })
   await settle()
   expect(w.notices).toEqual([expect.stringContaining(`${SETTINGS} is not valid JSON. Company made no changes.`)])
@@ -278,7 +237,7 @@ test('invalid settings JSON: one notice, and nothing installed or written', asyn
 })
 
 test('a hash mismatch: nothing installed or written, the download is deleted, one notice', async ($, on) => {
-  const w = world(on, { files: { [SETTINGS]: OLD }, check: ALLOWS })
+  const w = world(on, { files: { [SETTINGS]: OLD } })
   await $.session.start({ ...START })
   await settle()
   const [curl] = w.ran('curl')
@@ -334,7 +293,7 @@ test('Windows: the paths under USERPROFILE with backslashes, the zip build, rmdi
 test('Windows with RTK present: settings.json under USERPROFILE, python for pip', async ($, on) => {
   const home = 'C:\\Users\\me'
   const path = `${home}\\.claude\\settings.json`
-  const w = world(on, { env: { USERPROFILE: home }, machine: { sysname: 'Windows_NT', machine: 'x86_64' }, rtk: true, graphify: 'pip', python: 'Python 3.12.4', check: ALLOWS })
+  const w = world(on, { env: { USERPROFILE: home }, machine: { sysname: 'Windows_NT', machine: 'x86_64' }, rtk: true, graphify: 'pip', python: 'Python 3.12.4' })
   await $.session.start({ ...START })
   await settle()
   expect(w.ran('python')).toContainEqual(['python', '-m', 'pip', 'install', '--user', 'graphifyy==0.9.120'])
@@ -399,25 +358,24 @@ test('no settings file: one is made with Company first, and no backup', async ($
   await $.session.start({ ...START })
   await settle()
   expect(w.writes).toEqual([SETTINGS])
-  expect(JSON.parse(w.files[SETTINGS]!)).toEqual({ permissions: { allow: [] }, prependPlugins: [COMPANY], env: { [PONYTAIL]: 'ultra' } })
+  expect(JSON.parse(w.files[SETTINGS]!)).toEqual({ prependPlugins: [COMPANY], env: { [PONYTAIL]: 'ultra' } })
   expect(w.notices[0]).not.toContain('A copy of your settings')
 })
 
-test('mergeSettings dedupes, keeps the order, and refuses what it cannot merge', () => {
-  const m = mergeSettings('{"permissions":{"allow":["a"]},"prependPlugins":["x","company@synced"]}', ['a', 'b', 'b'])
+test('mergeSettings keeps the order, adds Company once, and refuses what it cannot merge', () => {
+  const m = mergeSettings('{"permissions":{"allow":["a"]},"prependPlugins":["x","company@synced"]}')
   expect('refuse' in m).toBe(false)
   if ('refuse' in m) return
-  expect(JSON.parse(m.text)).toEqual({ permissions: { allow: ['a', 'b'] }, prependPlugins: ['x', COMPANY], env: { [PONYTAIL]: 'ultra' } })
-  expect(m.added).toEqual({ allow: ['b'], plugins: [], made: ['env'], ponytail: {} })
-  expect((mergeSettings('  \n', []) as { added: unknown }).added).toEqual({ allow: [], plugins: [COMPANY], made: ['permissions', 'allow', 'prependPlugins', 'env'], ponytail: {} })
-  expect(mergeSettings('[1]', [])).toEqual({ refuse: 'is not a JSON object' })
-  expect(mergeSettings('{"permissions":{"allow":"x"}}', [])).toEqual({ refuse: 'has a permissions.allow that is not a list' })
-  expect(mergeSettings('{"prependPlugins":"x"}', [])).toEqual({ refuse: 'has a prependPlugins that is not a list' })
-  expect(mergeSettings('{"env":["x"]}', [])).toEqual({ refuse: 'has an env that is not an object' })
+  expect(JSON.parse(m.text)).toEqual({ permissions: { allow: ['a'] }, prependPlugins: ['x', COMPANY], env: { [PONYTAIL]: 'ultra' } })
+  expect(m.added).toEqual({ plugins: [], made: ['env'], ponytail: {} })
+  expect((mergeSettings('  \n') as { added: unknown }).added).toEqual({ plugins: [COMPANY], made: ['prependPlugins', 'env'], ponytail: {} })
+  expect(mergeSettings('[1]')).toEqual({ refuse: 'is not a JSON object' })
+  expect(mergeSettings('{"prependPlugins":"x"}')).toEqual({ refuse: 'has a prependPlugins that is not a list' })
+  expect(mergeSettings('{"env":["x"]}')).toEqual({ refuse: 'has an env that is not an object' })
 })
 
 test('undo takes out only the recorded additions; the person edits after setup stay', () => {
-  const m = mergeSettings(OLD, ['Bash(rtk git status:*)'])
+  const m = mergeSettings(OLD)
   if ('refuse' in m) throw new Error(m.refuse)
   // After setup the person adds a rule and a key of their own.
   const edited = JSON.parse(m.text)
@@ -425,11 +383,11 @@ test('undo takes out only the recorded additions; the person edits after setup s
   edited.theme = 'dark'
   const u = unmergeSettings(JSON.stringify(edited), m.added)
   if ('refuse' in u) throw new Error(u.refuse)
-  // The rule, Company and ponytail's mode.
-  expect(u.removed).toBe(3)
+  // Company and ponytail's mode.
+  expect(u.removed).toBe(2)
   expect(JSON.parse(u.text)).toEqual({ ...JSON.parse(OLD), permissions: { allow: ['Bash(npm test:*)', 'Bash(find:*)', 'Bash(make:*)'], deny: ['Bash(git push:*)'] }, theme: 'dark' })
   // A file setup made: undo leaves no empty lists behind.
-  const fresh = mergeSettings(undefined, ['Bash(rtk ls:*)'])
+  const fresh = mergeSettings(undefined)
   if ('refuse' in fresh) throw new Error(fresh.refuse)
   expect(JSON.parse((unmergeSettings(fresh.text, fresh.added) as { text: string }).text)).toEqual({})
   expect(unmergeSettings('{,', fresh.added)).toEqual({ refuse: 'is not valid JSON' })
@@ -490,16 +448,16 @@ test('RTK newer than the pin: kept, never downgraded', async ($, on) => {
 })
 
 test('undo keeps the empty lists the person had before setup', () => {
-  const m = mergeSettings('{"permissions":{"allow":[]},"prependPlugins":[],"env":{}}', ['Bash(rtk ls:*)'])
+  const m = mergeSettings('{"prependPlugins":[],"env":{}}')
   if ('refuse' in m) throw new Error(m.refuse)
   expect(m.added.made).toEqual([])
   const u = unmergeSettings(m.text, m.added) as { text: string }
-  expect(JSON.parse(u.text)).toEqual({ permissions: { allow: [] }, prependPlugins: [], env: {} })
+  expect(JSON.parse(u.text)).toEqual({ prependPlugins: [], env: {} })
 })
 
 test('ponytail: absent -> ultra and undo removes it; "full" -> ultra and undo gives "full" back; "ultra" -> nothing recorded', () => {
   const round = (text: string) => {
-    const m = mergeSettings(text, [])
+    const m = mergeSettings(text)
     if ('refuse' in m) throw new Error(m.refuse)
     const u = unmergeSettings(m.text, m.added) as { text: string }
     return { env: JSON.parse(m.text).env, ponytail: m.added.ponytail, undone: JSON.parse(u.text) }
@@ -508,9 +466,136 @@ test('ponytail: absent -> ultra and undo removes it; "full" -> ultra and undo gi
   expect(round(`{"env":{"${PONYTAIL}":"full"}}`)).toEqual({ env: { [PONYTAIL]: 'ultra' }, ponytail: { was: 'full' }, undone: { env: { [PONYTAIL]: 'full' } } })
   expect(round(`{"env":{"${PONYTAIL}":"ultra"}}`).ponytail).toBeUndefined()
   // Set to another mode after setup: undo leaves it.
-  const m = mergeSettings('{}', [])
+  const m = mergeSettings('{}')
   if ('refuse' in m) throw new Error(m.refuse)
   const later = JSON.parse(m.text)
   later.env[PONYTAIL] = 'lite'
   expect(JSON.parse((unmergeSettings(JSON.stringify(later), m.added) as { text: string }).text).env).toEqual({ [PONYTAIL]: 'lite' })
+})
+
+test('a later run records ponytail\'s mode from just before it: run 1 had full, the person set lite, undo gives lite', async ($, on) => {
+  const w = world(on, { rtk: true, graphify: 'present', files: { [SETTINGS]: `{"env":{"${PONYTAIL}":"full"}}` } })
+  await $.session.start({ ...START })
+  await settle()
+  expect((w.held.setupAdded as { ponytail: unknown }).ponytail).toEqual({ was: 'full' })
+  // The person sets lite; a second run (the flag cleared, as the pane's Set up does).
+  const now = JSON.parse(w.files[SETTINGS]!)
+  now.env[PONYTAIL] = 'lite'
+  w.files[SETTINGS] = JSON.stringify(now)
+  delete w.held.setup
+  await $.session.start({ ...START })
+  await settle()
+  const rec = w.held.setupAdded as Parameters<typeof unmergeSettings>[1]
+  expect(rec.ponytail).toEqual({ was: 'lite' })
+  expect(JSON.parse((unmergeSettings(w.files[SETTINGS]!, rec) as { text: string }).text).env).toEqual({ [PONYTAIL]: 'lite' })
+})
+
+test('a flag the store gives after 1.5 s fills the dashboard state and never brings the box', async ($, on) => {
+  const clock = mock.clock(on, { now: 1000 })
+  const w = world(on, { store: { setup: { state: 'done' } }, flagWait: clock.sleep(3000) })
+  await $.session.start({ ...START })
+  await clock.advance(1500)
+  await settle()
+  await clock.advance(2000)
+  await settle()
+  expect(w.asked).toEqual([])
+  // The state the late answer goes into: loaded when nothing changed since the read began.
+  const st = createShared(['setup'])
+  const before = st.setup
+  loadFlag(st, { state: 'done' }, before)
+  expect(setupStatus(st)).toEqual({ state: 'done' })
+  // A run that ended since then keeps its own state.
+  const st2 = createShared(['setup'])
+  const before2 = st2.setup
+  st2.setup = { state: 'failed', reason: 'RTK download failed', running: false }
+  loadFlag(st2, { state: 'declined' }, before2)
+  expect(setupStatus(st2)).toEqual({ state: 'failed', reason: 'RTK download failed' })
+})
+
+test('run folders of a killed run go once they are 15 min old; a younger one and other names stay', async ($, on) => {
+  const old = '11111111-1111-4111-8111-111111111111'
+  const young = '22222222-2222-4222-8222-222222222222'
+  const w = world(on, { files: { [SETTINGS]: OLD }, runDirs: { [old]: 0, [young]: Date.now(), 'keep-me': 0 } })
+  await $.session.start({ ...START })
+  await settle()
+  const rm = w.ran('rm').map((a) => a[3])
+  expect(rm).toContain(`${DL}/${old}`)
+  expect(rm).not.toContain(`${DL}/${young}`)
+  expect(rm).not.toContain(`${DL}/keep-me`)
+})
+
+test('a download with the pinned SHA-256: unpacked and checked in the run folder, then moved to the bin folder', async () => {
+  // runSetup runs here with a plain stand-in for `$`, so the pin it reads is this file's copy: set,
+  // for this test only, to the real SHA-256 of a fake archive.
+  const fake = 'a fake rtk archive'
+  const real = RTK.assets['linux-x64']!
+  RTK.assets['linux-x64'] = { name: ASSET, sha256: await digestHex(new TextEncoder().encode(fake)) }
+  const files: Record<string, string> = { [SETTINGS]: '{}' }
+  const held: Record<string, unknown> = {}
+  const runs: string[][] = []
+  let unpacked = ''
+  let installed = false
+  const res = (stdout = '', exitCode = 0) => ({ exitCode, stdout, stderr: '' })
+  const missing = (what: string) => Promise.reject(new Error(`spawn ${what} ENOENT`))
+  const engine = {
+    session: { machine: async () => ({ sysname: 'Linux', release: '6.8.0', machine: 'x86_64' }), append: async () => undefined },
+    env: { get: async (k: string) => (k === 'HOME' ? '/home/me' : undefined) },
+    store: { get: async (k: string) => held[k], set: async (k: string, v: unknown) => void (held[k] = v), delete: async (k: string) => void delete held[k] },
+    clock: { now: async () => 5_000_000 },
+    ui: { status: () => undefined },
+    fs: {
+      read: async (path: string, o?: { offset?: number; length?: number }) => {
+        if (!(path in files)) throw new Error(`open ${path} failed: ENOENT`)
+        return o ? { base64: btoa(files[path]!.slice(o.offset ?? 0, (o.offset ?? 0) + (o.length ?? files[path]!.length))) } : files[path]
+      },
+      stat: async (path: string) => {
+        if (!(path in files)) throw new Error(`stat ${path} failed: ENOENT`)
+        return { kind: 'file', size: files[path]!.length, mtimeMs: 0, isLink: false }
+      },
+      list: async () => [],
+      exists: async () => false,
+      write: async (path: string, text: string) => void (files[path] = text),
+    },
+    process: {
+      run: async (argv: string[]) => {
+        runs.push(argv)
+        const [cmd = '', a1 = ''] = argv
+        if (cmd === 'curl') return (files[argv[argv.indexOf('-o') + 1]!] = fake), res()
+        if (cmd === 'tar') return (unpacked = `${argv[argv.indexOf('-C') + 1]}/rtk`), res()
+        if (cmd === 'mv') return (installed = argv[3] === unpacked), res()
+        if (cmd === 'mkdir' || cmd === 'rm') return res()
+        // RTK answers by the unpacked path once tar ran, then on the PATH once it moved.
+        if ((cmd === unpacked && unpacked) || (cmd === 'rtk' && installed)) return a1 === '--version' ? res('rtk 1.2.1\n') : res('{}')
+        if (cmd === 'graphify') return res('graphify 0.9.120\n')
+        return missing(cmd)
+      },
+    },
+  }
+  try {
+    const st = createShared(['setup'])
+    await runSetup(engine as never, st)
+    const dir = runs.find((a) => a[0] === 'curl')![8]!.slice(0, -ASSET.length - 1)
+    expect(dir).toMatch(RUN_DIR)
+    const at = (cmd: string, a1?: string) => runs.findIndex((a) => a[0] === cmd && (a1 === undefined || a[1] === a1))
+    expect(runs.filter((a) => a[0] === 'tar')).toEqual([['tar', '-xzf', `${dir}/${ASSET}`, '-C', dir, 'rtk']])
+    // The new binary answers in the run folder, and only then moves to the bin folder.
+    expect(at(`${dir}/rtk`, '--version')).toBeGreaterThan(at('tar'))
+    expect(at('mv')).toBeGreaterThan(at(`${dir}/rtk`, 'gain'))
+    expect(runs.filter((a) => a[0] === 'mv')).toEqual([['mv', '-f', '--', `${dir}/rtk`, `${BIN}/rtk`]])
+    expect(at('rm')).toBeGreaterThan(at('mv'))
+    expect(runs.filter((a) => a[0] === 'rm')).toEqual([['rm', '-rf', '--', dir]])
+    expect(setupStatus(st)).toEqual({ state: 'done' })
+    expect(JSON.parse(files[SETTINGS]!).prependPlugins).toEqual([COMPANY])
+  } finally {
+    RTK.assets['linux-x64'] = real
+  }
+})
+
+test('the box names the settings change and the copy; each sentence has 20 words or fewer and no -ing word', () => {
+  expect(QUESTION).toContain('It changes your settings.json and keeps a copy.')
+  expect(QUESTION).not.toContain('allow')
+  for (const sentence of QUESTION.split(/(?<=[.?])\s+/)) {
+    expect(sentence.split(/\s+/).length).toBeLessThanOrEqual(20)
+    expect(/\b\w+ing\b/.test(sentence)).toBe(false)
+  }
 })

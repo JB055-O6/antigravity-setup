@@ -104,10 +104,8 @@ test('a rewrite runs the rtk form; rtk gain is read once per turn and at session
   await $.tool.call({ tool: 'Bash', command: 'git show HEAD' })
   expect(seen).toEqual(['rtk git status', 'cd x && rtk git log -5', 'rtk git diff --stat', 'git diff | head -50', 'rtk git show HEAD'])
   expect(r.rewrites()).toEqual(['git status', 'cd x && git log -5', 'git diff --stat', 'git show HEAD'])
-  // Both forms are checked, the original first.
-  expect(asked).toEqual([
-    'git status', 'rtk git status', 'cd x && git log -5', 'cd x && rtk git log -5', 'git diff --stat', 'rtk git diff --stat', 'git show HEAD', 'rtk git show HEAD',
-  ])
+  // Only the original is queried; the rtk form gets core's own check of the call (per-call check).
+  expect(asked).toEqual(['git status', 'cd x && git log -5', 'git diff --stat', 'git show HEAD'])
   // The start total, then one read per turn with a rewrite.
   expect(r.runs.filter((a) => a[1] === 'gain')).toHaveLength(3)
   expect(new Set(r.timeouts)).toEqual(new Set([2000]))
@@ -145,18 +143,57 @@ test('a deny rule on the original: rtk is not run, and core refuses the command 
   expect(r.rewrites()).toEqual([])
 })
 
-test('an allowed original with an ask on its rtk form: no rewrite, one skip counted', async ($, on) => {
+// The engine's check of real calls (with a tool_use_id): `decide` answers; `ids` keeps each id per command.
+function core(on: On, decide: (cmd: string, id?: string) => 'allow' | 'ask' | 'deny') {
+  const ids: Record<string, string> = {}
+  on('tool.check', { tool: 'Bash' }, (_, e) => {
+    const c = (e.input as { command: string }).command
+    if (e.tool_use_id !== undefined) ids[c] = e.tool_use_id
+    return { decision: decide(c, e.tool_use_id) }
+  })
+  return ids
+}
+
+test('per-call check: core asks on the rtk form of an allowed original; that one call is allowed, nothing else', async ($, on) => {
   quiet(on)
-  const read = state(on)
   rtk(on)
-  perms(on, (c) => (c.startsWith('rtk ') ? 'ask' : 'allow'))
-  const seen = bash(on)
+  // No allow rule covers the rtk form, so core asks (the original is allowed).
+  let later: 'allow' | 'ask' | 'deny' = 'ask'
+  const ids = core(on, (c, id) => (!c.startsWith('rtk ') ? 'allow' : id === undefined ? 'allow' : later))
+  // The Bash tool runs only a call core let through.
+  const seen: string[] = []
+  on('tool.call', { tool: 'Bash' }, (_, e) => (seen.push(e.command), { result: { stdout: 'ok\n', stderr: '', interrupted: false } }) as never)
   await $.session.start({ ...START })
   await $.tool.call({ tool: 'Bash', command: 'git status' })
-  expect(seen).toEqual(['git status'])
-  await $.session.end({ ...END })
-  expect(read('panel').rtkSkipped).toBe(1)
-  expect(read('ledger')?.rtk?.acted ?? 0).toBe(0)
+  expect(seen).toEqual(['rtk git status'])
+  const id = ids['rtk git status']!
+  const check = (command: string, tool_use_id?: string) => $.tool.check({ tool: 'Bash', input: { command }, ...(tool_use_id ? { tool_use_id } : {}) } as never)
+  // Used once: the same id again, another id, a command changed beneath, an rtk command nobody rewrote.
+  expect((await check('rtk git status', id)).decision).toBe('ask')
+  expect((await check('rtk git status', 'other-id')).decision).toBe('ask')
+  expect((await check('rtk git log -5', 'typed-id')).decision).toBe('ask')
+  // A deny stays a deny, on a recorded rewrite too.
+  later = 'deny'
+  const got = await $.tool.call({ tool: 'Bash', command: 'git log -5' })
+  expect(got.isError).toBe(true)
+  expect(seen).toEqual(['rtk git status'])
+})
+
+test('per-call check: a recorded rewrite whose command changed beneath, or with another id, stays an ask', async ($, on) => {
+  quiet(on)
+  rtk(on)
+  // The rtk form is allowed during the call (an rtk rule of the person's), so the record stays unused.
+  let rule = true
+  const ids = core(on, (c) => (!c.startsWith('rtk ') || rule ? 'allow' : 'ask'))
+  bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'git status' })
+  rule = false
+  const id = ids['rtk git status']!
+  const check = (command: string, tool_use_id: string) => $.tool.check({ tool: 'Bash', input: { command }, tool_use_id } as never)
+  expect((await check('rtk git status --short', id)).decision).toBe('ask')
+  expect((await check('rtk git status', 'other-id')).decision).toBe('ask')
+  expect((await check('rtk git status', id)).decision).toBe('allow')
 })
 
 test('rtk missing: off as not installed, not a failure, and commands run as typed', async ($, on) => {
@@ -336,6 +373,19 @@ test('the Bash tool cannot find rtk, with no error (a later part ends 0): the co
   expect(r.rewrites()).toEqual(['git status'])
   await $.session.end({ ...END })
   expect(read('health').rtk).toMatchObject({ on: false, off: 'not installed', fails: 0 })
+})
+
+test('a grep that prints the shell\'s words on stdout: rtk stays on, and the command runs once', async ($, on) => {
+  quiet(on)
+  const read = state(on)
+  rtk(on)
+  perms(on)
+  const seen = bash(on, './notes.txt:3:zsh: command not found: rtk\n')
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'grep -rn "command not found: rtk" .' })
+  expect(seen).toEqual(['rtk grep -rn "command not found: rtk" .'])
+  await $.session.end({ ...END })
+  expect(read('health').rtk).toMatchObject({ on: true, fails: 0 })
 })
 
 // `false` is not a form rtk may run any more (ruling): a read-only form that fails stands in for it.

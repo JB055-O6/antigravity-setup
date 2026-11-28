@@ -173,3 +173,11 @@ test('no frontmatter, or a name: that is not the saver: the bundled copy', async
   const got = await loadSavers(engine(files).eng, r)
   expect(got.source).toEqual({ caveman: 'bundled', headroom: 'bundled', ponytail: 'installed', 'i-have-adhd': 'bundled' })
 })
+
+test('a SKILL.md that lands in a sibling folder whose name only starts like the root: the bundled copy, and no read', async () => {
+  const files = { '/p/cave/LICENSE': 'MIT', '/p/caveman-x/SKILL.md': SKILL_MD.caveman }
+  const { eng, reads } = engine(files, { '/p/cave/skills/caveman/SKILL.md': '/p/caveman-x/SKILL.md' })
+  const got = await loadSavers(eng, { caveman: '/p/cave' })
+  expect(got.source.caveman).toBe('bundled')
+  expect(reads).toEqual([])
+})

@@ -42,7 +42,6 @@ export type Shared = {
   top5: { id: string; chars: number }[]
   // Sections a module above audit adds to this render, in chars by id: audit sits beneath and never sees them.
   ownSections: Record<string, number>
-  // rtk rewrites left out because the rewritten command would need a prompt or is denied (/company shows it).
   // The code graph (graph module): a run going on, graph.json's time, graphify-out's bytes, and
   // whether graphify kept the old graph (no more updates this session); the dashboard shows them.
   graph: { running: boolean; builtAt?: number; bytes?: number; kept?: boolean }

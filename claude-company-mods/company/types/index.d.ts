@@ -12,8 +12,8 @@ export type Panel = {
   routed: number
   governed: number
   diet: number
-  // rtk rewrites left out for a permission reason, this load.
-  rtkSkipped?: number
+  // The one-time machine setup (setup module): not asked, declined, done or failed, and why.
+  setup?: { state: string; reason?: string }
   log: PanelLine[]
   runs: CrewRun[]
 }

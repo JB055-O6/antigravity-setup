@@ -19,8 +19,10 @@ export type RtkMode = 'light' | 'full'
 export const DEFAULT_MODE: RtkMode = 'light'
 const RUN_MS = 2000
 const VERSION = (stdout: string) => /^rtk \d/.test(stdout)
-// The shell's answer when the Bash tool cannot find rtk (bash, zsh, sh, cmd), as a whole line.
-const NOT_FOUND = /^(?:.*: )?rtk: (?:command )?not found\r?$|^(?:.*: )?command not found: rtk\r?$|^'rtk' is not recognized as an internal or external command/m
+// A shell's own line when the Bash tool cannot find rtk (bash, sh, dash, ksh, zsh, cmd), as a whole
+// line: a grep hit that quotes it (`./notes.txt:3:zsh: ...`, `./a:4:/bin/bash: ...`) is not one.
+const NOT_FOUND =
+  /^(?:[^\s:]*\/)?(?:ba|z|da|k)?sh: (?:line \d+: |\d+: )?rtk: (?:command )?not found\r?$|^zsh: command not found: rtk\r?$|^'rtk' is not recognized as an internal or external command/m
 // The rewrites the per-call check may allow: this many at most, the oldest dropped first.
 const KEEP = 200
 // rtk reads a repo's own filters only after `rtk trust`, which company never runs.
@@ -145,8 +147,9 @@ async function rewrite($: EngineInterface, e: Parameters<Bash>[1], ctx: Ctx, rt:
   const host = (e as { readonly _host?: unknown })._host
   const device = (host !== undefined && host !== null && host !== '') || isDeviceTool(e.tool)
   // Only a read-only command goes to rtk at all: a write never meets it. A call with no id cannot
-  // get the per-call check, so it runs as typed.
-  if (rt.bin === undefined || typeof cmd !== 'string' || e.tool_use_id === undefined || device || !shouldTry(cmd) || !inMode(cmd, 'full')) return null
+  // get the per-call check, so it runs as typed. The check below asks for the main loop, never a subagent's.
+  // shortcut: no rtk in subagents until $.tool.check takes an agent id
+  if (rt.bin === undefined || typeof cmd !== 'string' || e.tool_use_id === undefined || e.agentId !== undefined || device || !shouldTry(cmd) || !inMode(cmd, 'full')) return null
   // The tool's arguments as the permission check reads them.
   const { tool: _tool, tool_use_id: _id, agentId: _agent, requestMeta: _meta, ...args } = e
   // Permission first: a command that is denied or asks for a prompt stays as typed, and rtk is not run.
@@ -163,15 +166,17 @@ function remember(rt: Rt, id: string, cmd: string): void {
   if (rt.rewrites.size > KEEP) rt.rewrites.delete(rt.rewrites.keys().next().value!)
 }
 
-// Core's ask on a call this module rewrote, with the exact command it gave, becomes an allow: the
-// original ran the same check with no prompt, and every rewrite is a read-only form. A deny, an ask
-// a plugin made or the organization's ceiling, and every other call stay as they are.
+// Core's bare ask on a call this module rewrote, with the exact command it gave, becomes an allow:
+// the original ran the same check with no prompt, and every rewrite is a read-only form. Only the
+// ask of no rule: an ask a rule, a classic hook, an option, a plugin or the organization's ceiling
+// made (or a ceiling the engine could not read) stays, as do a deny and every other call.
 async function rtkCheck(e: Parameters<Check>[1], next: Parameters<Check>[2], rt: Rt) {
   const r = await next(e)
   const id = e.tool_use_id
   const want = id === undefined ? undefined : rt.rewrites.get(id)
   const cmd = (e.input as { command?: unknown } | undefined)?.command
-  if (r.decision !== 'ask' || r.plugin !== undefined || r.ceiling !== undefined || want === undefined || want !== cmd) return r
+  const bare = r.rule === undefined && r.hook === undefined && r.setting === undefined && r.plugin === undefined && r.ceiling === undefined && !e.isCeilingUnread
+  if (r.decision !== 'ask' || !bare || want === undefined || want !== cmd) return r
   rt.rewrites.delete(id!)
   return { decision: 'allow' as const, reason: 'company rtk: the read-only rtk form of a command that runs with no prompt' }
 }
@@ -202,10 +207,10 @@ async function addGain($: EngineInterface, ctx: Ctx, rt: Rt, bin: string): Promi
   rt.unread = false
 }
 
-// What the shell said about a Bash run, read with no type: stderr, and an error's text. Never
-// stdout: a command can print the shell's words there (`grep -rn "command not found: rtk"`).
+// What a Bash run printed, read with no type: an error's text, or stdout and stderr (the engine
+// merges stderr into stdout). NOT_FOUND takes only a shell's own whole line from it.
 function shellSaid(r: unknown): string {
-  const v = r as { isError?: unknown; text?: unknown; result?: unknown } | undefined
-  const rec = (typeof v?.result === 'object' && v.result !== null ? v.result : {}) as { stderr?: unknown }
-  return [rec.stderr, ...(v?.isError ? [v.text, v.result] : [])].filter((x): x is string => typeof x === 'string').join('\n')
+  const v = r as { text?: unknown; result?: unknown } | undefined
+  const rec = (typeof v?.result === 'object' && v.result !== null ? v.result : {}) as { stdout?: unknown; stderr?: unknown }
+  return [v?.text, v?.result, rec.stdout, rec.stderr].filter((x): x is string => typeof x === 'string').join('\n')
 }

@@ -71,6 +71,7 @@ export function showStatus($: EngineInterface, st: Shared): void {
     diet: st.ledger.diet.acted,
     log: st.log,
     runs: st.runs,
+    setup: { state: st.setup.state, ...(st.setup.reason !== undefined ? { reason: st.setup.reason } : {}) },
   })).catch(() => {})
   // No pane on screen (a cloud session seen from an app): post each new action as a chat
   // notice. The model never reads notices, so they cost no tokens.

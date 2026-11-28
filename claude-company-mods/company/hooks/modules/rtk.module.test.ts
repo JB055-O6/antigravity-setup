@@ -96,7 +96,7 @@ test('a rewrite runs the rtk form; rtk gain is read once per turn and at session
   const seen = bash(on)
   await $.session.start({ ...START })
   await $.tool.call({ tool: 'Bash', command: 'git status' })
-  await $.tool.call({ tool: 'Bash', command: 'cd x && git log -5', agentId: 'a1' })
+  await $.tool.call({ tool: 'Bash', command: 'cd x && git log -5' })
   await $.turn.start({ text: 'next', turnId: 't2' })
   await $.tool.call({ tool: 'Bash', command: 'git diff --stat' })
   // Piped: left as typed, and rtk is not even asked.
@@ -194,6 +194,52 @@ test('per-call check: a recorded rewrite whose command changed beneath, or with 
   expect((await check('rtk git status --short', id)).decision).toBe('ask')
   expect((await check('rtk git status', 'other-id')).decision).toBe('ask')
   expect((await check('rtk git status', id)).decision).toBe('allow')
+})
+
+test('per-call check: only a bare core ask on a recorded rewrite becomes an allow; a rule, hook, option, plugin or ceiling ask stays', async ($, on) => {
+  quiet(on)
+  rtk(on)
+  // The rtk form is allowed during each call, so each record stays for the checks below.
+  let later: { decision: 'ask' } | undefined
+  const ids: string[] = []
+  on('tool.check', { tool: 'Bash' }, (_, e) => {
+    const c = (e.input as { command: string }).command
+    if (c.startsWith('rtk ') && e.tool_use_id !== undefined && later === undefined) ids.push(e.tool_use_id)
+    return (c.startsWith('rtk ') && later) || { decision: 'allow' }
+  })
+  bash(on)
+  await $.session.start({ ...START })
+  // The ceiling is the question's own (a hook's is dropped), so it goes on the input, as isCeilingUnread does.
+  const asks: [{ decision: 'ask' }, Record<string, unknown>?][] = [
+    [{ decision: 'ask', rule: 'Bash(rtk:*)' } as { decision: 'ask' }],
+    [{ decision: 'ask', hook: 'PreToolUse' } as { decision: 'ask' }],
+    [{ decision: 'ask', setting: 'permissions.blockReadsOutsideWorkingDirectories' } as { decision: 'ask' }],
+    [{ decision: 'ask', plugin: 'guard' } as { decision: 'ask' }],
+    [{ decision: 'ask' }, { ceiling: 'ask' }],
+    [{ decision: 'ask' }, { isCeilingUnread: true }],
+    [{ decision: 'ask' }],
+  ]
+  for (const _ of asks) await $.tool.call({ tool: 'Bash', command: 'git status' })
+  const got: unknown[] = []
+  for (const [k, [verdict, input]] of asks.entries()) {
+    later = verdict
+    got.push((await $.tool.check({ tool: 'Bash', input: { command: 'rtk git status' }, tool_use_id: ids[k]!, ...input } as never)).decision)
+  }
+  expect(got).toEqual(['ask', 'ask', 'ask', 'ask', 'ask', 'ask', 'allow'])
+  // Once: the bare ask is used up.
+  expect((await $.tool.check({ tool: 'Bash', input: { command: 'rtk git status' }, tool_use_id: ids[6]! } as never)).decision).toBe('ask')
+})
+
+test('a subagent\'s call is never rewritten: the permission query cannot name its loop', async ($, on) => {
+  quiet(on)
+  const r = rtk(on)
+  const asked = perms(on)
+  const seen = bash(on)
+  await $.session.start({ ...START })
+  await $.tool.call({ tool: 'Bash', command: 'git status', agentId: 'a1' })
+  expect(seen).toEqual(['git status'])
+  expect(r.rewrites()).toEqual([])
+  expect(asked).toEqual([])
 })
 
 test('rtk missing: off as not installed, not a failure, and commands run as typed', async ($, on) => {
@@ -354,7 +400,7 @@ test('the Bash tool cannot find rtk: the command runs again as typed, and rtk re
   expect(read('health').rtk).toMatchObject({ on: false, off: 'not installed', fails: 0 })
 })
 
-test('the Bash tool cannot find rtk, with no error (a later part ends 0): the command runs again as typed, and rtk rests for the session', async ($, on) => {
+test('the Bash tool cannot find rtk, with no error (`rtk git status; pwd` ends 0, stderr merged into stdout): the command runs again as typed, and rtk rests for the session', async ($, on) => {
   quiet(on)
   const read = state(on)
   const r = rtk(on)
@@ -362,8 +408,8 @@ test('the Bash tool cannot find rtk, with no error (a later part ends 0): the co
   const seen: string[] = []
   on('tool.call', { tool: 'Bash' }, (_, e) => {
     seen.push(e.command)
-    const stderr = e.command.startsWith('rtk ') ? 'zsh: command not found: rtk\n' : ''
-    return { result: { stdout: 'ok\n', stderr, interrupted: false } } as never
+    const stdout = e.command.startsWith('rtk ') ? '/bin/bash: line 1: rtk: command not found\n/repo\n' : 'ok\n'
+    return { result: { stdout, stderr: '', interrupted: false } } as never
   })
   await $.session.start({ ...START })
   await $.tool.call({ tool: 'Bash', command: 'git status' })
@@ -375,15 +421,22 @@ test('the Bash tool cannot find rtk, with no error (a later part ends 0): the co
   expect(read('health').rtk).toMatchObject({ on: false, off: 'not installed', fails: 0 })
 })
 
-test('a grep that prints the shell\'s words on stdout: rtk stays on, and the command runs once', async ($, on) => {
+test('a grep hit that quotes the shell\'s line, on stdout or in an error\'s text: rtk stays on, and each command runs once', async ($, on) => {
   quiet(on)
   const read = state(on)
   rtk(on)
   perms(on)
-  const seen = bash(on, './notes.txt:3:zsh: command not found: rtk\n')
+  const hit = './notes.txt:3:zsh: command not found: rtk\n./notes.txt:4:/bin/bash: line 1: rtk: command not found'
+  const seen: string[] = []
+  on('tool.call', { tool: 'Bash' }, (_, e) => {
+    seen.push(e.command)
+    // grep exits 2 when one of its files cannot be read: an error that still prints the hits.
+    return (e.command.includes(' missing') ? { isError: true, result: `Exit code 2\n${hit}`, text: `Exit code 2\n${hit}` } : { result: { stdout: `${hit}\n`, stderr: '', interrupted: false } }) as never
+  })
   await $.session.start({ ...START })
   await $.tool.call({ tool: 'Bash', command: 'grep -rn "command not found: rtk" .' })
-  expect(seen).toEqual(['rtk grep -rn "command not found: rtk" .'])
+  await $.tool.call({ tool: 'Bash', command: 'grep -rn "command not found: rtk" missing' })
+  expect(seen).toEqual(['rtk grep -rn "command not found: rtk" .', 'rtk grep -rn "command not found: rtk" missing'])
   await $.session.end({ ...END })
   expect(read('health').rtk).toMatchObject({ on: true, fails: 0 })
 })

@@ -493,12 +493,23 @@ test('a later run records ponytail\'s mode from just before it: run 1 had full, 
 test('a flag the store gives after 1.5 s fills the dashboard state and never brings the box', async ($, on) => {
   const clock = mock.clock(on, { now: 1000 })
   const w = world(on, { store: { setup: { state: 'done' } }, flagWait: clock.sleep(3000) })
+  // $.state for company: the pane snapshot the dashboard draws from.
+  const state: Record<string, { value: unknown; version: number }> = {}
+  on('state.get', (_, e, next) => (e.plugin === 'company' ? { value: state[e.key] ?? { value: undefined, version: 0 } } : next(e)))
+  on('state.set', (_, e, next) => {
+    if (e.plugin !== 'company') return next(e)
+    state[e.key] = { value: e.value, version: (state[e.key]?.version ?? 0) + 1 }
+    return { value: { isSet: true, version: state[e.key]!.version } }
+  })
+  const pane = () => (state.panel?.value as { value?: { setup?: unknown } } | undefined)?.value?.setup
   await $.session.start({ ...START })
   await clock.advance(1500)
   await settle()
+  expect(pane()).not.toEqual({ state: 'done' })
   await clock.advance(2000)
   await settle()
   expect(w.asked).toEqual([])
+  expect(pane()).toEqual({ state: 'done' })
   // The state the late answer goes into: loaded when nothing changed since the read began.
   const st = createShared(['setup'])
   const before = st.setup

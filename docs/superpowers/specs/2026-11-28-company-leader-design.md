@@ -1,6 +1,6 @@
 # Company 0.11: the leader module — design
 
-Date: 2026-11-28. Amends `2026-11-26-company-mod-0.11-design.md` (the base spec). Where they differ, this doc wins.
+Date: 2026-11-28. Status: awaiting client approval. Amends `2026-11-26-company-mod-0.11-design.md` (the base spec). Where they differ, this doc wins.
 
 ## 1. Intent and why
 
@@ -154,3 +154,13 @@ Exact glyphs and colors; file layout of `company/savers/`; header regexes; final
 2. A false drop → rules lost. Mitigation: drop only with the leader's copy in place, exact headers only, tests for leader-off and unknown headers.
 3. Big main section (~4,500 tokens) on every session. Mostly replaces plugin copies already sent; cached after the first request. Benchmark measures.
 4. Plugin SKILL.md text is user-installed content placed in the system prompt. Bounded size, frontmatter stripped, no code run.
+
+## 12. Builder check: answers and calls
+
+1. **Who sets a saver's level mid-session?** The leader (client: "always load full", "max level"; my call on the details). The leader text stays ultra all session. ponytail's own notes (`PONYTAIL MODE CHANGED`, `PONYTAIL MODE OFF`, its level line) are dropped by §6.4 while the leader's copy is in place; "stop adhd mode" does not turn the leader's copy off. Setup (T14) also sets ponytail's own default to ultra (`PONYTAIL_DEFAULT_MODE`, `hooks/ponytail-config.js:85`) so ponytail's band and its texts agree. The client turns the leader's savers off only through the pane (module off), never by a chat phrase.
+2. **Second copies through skills?** Yes, stopped (my call; Goal 1). A `skill.prompt` hook replaces the SKILL.md body of caveman, headroom, ponytail or i-have-adhd with one line ("<saver> is already active (company leader)") when the leader's copy is in place for that context. Any arguments the client typed with the skill pass through unchanged. Otherwise the skill runs as usual.
+3. **Net-gain guard scoring.** (my call) The per-session red flag applies only to modules with a direct token count: bashcap, rtk, diet caps, leader dedupe (and the leader's own net: tokens dropped minus tokens added, shown as it is). Modules whose gain is behaviour (graph, router, governor, the leader's text, the subagent block) show the benchmark verdict from `measure/LEDGER.md` ("proven: −x %", "not yet proven", "costs more: +x %"), never a per-session red.
+4. **Economy at 75 % and benchmark fairness.** (my call) The bench keeps its fail-closed rule: all lanes wait at 5 h ≥ 73 % or week ≥ 73 % (`score3.py` `LIMIT`, `WEEK_LIMIT`, and the `bench3.sh` text). No new switch. If the week is already ≥ 73 % when T18 starts, I report it to the client before waiting.
+5. **Which cloud environment?** (my call) The one this session runs in, if `get_environment` shows it is personal and editable; it is the client's Default when that is personal (rtk and graphify are universal tools, per the client). The script lives on the environment, not in the repo. Hosts for the rtk download are added exactly as the environment needs; the client approves the change in its own prompt.
+
+Builder calls accepted: build the leader texts at the first compose (a hot reload fires no `session.start`, `register.tsx:76`); check by spike the order of compose and attachment on the first request, when a subagent's `agentId` is known at spawn, and plugin paths from `plugin.register`; the crew prompts and the report rule use one number (≤ 25 lines, from the leader's single rule; crew text points to it instead of its own "15").

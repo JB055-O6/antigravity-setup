@@ -83,11 +83,11 @@ Subagent block (added to each subagent prompt as diet does today; not for forks,
 Text sources, read once at session start, bounded (≤ 8,000 B per file; bad UTF-8 or too big → bundled copy):
 - caveman, headroom, i-have-adhd, ponytail: the installed plugin's SKILL.md body, frontmatter stripped, `${CLAUDE_SKILL_DIR}` replaced by that skill's folder. Plugin path from the engine API only; none → bundled copy.
 - ponytail ultra: the SKILL.md body plus a first line stating level ultra (the body's level table already defines ultra).
-- Bundled copies live in `company/savers/` with each plugin's MIT notice and credit.
+- Bundled copies live in `hooks/savers.ts` as TS strings (a hooks module cannot import .md); the 4 MIT notices and credits are in `company/savers/NOTICE.md`.
 
 ### 6.3 Caps (replace base spec / plan caps)
 
-Measured sizes: CHARTER_CORE ~4,100; caveman 2,107; headroom 1,307; ponytail ~3,200; i-have-adhd ~6,800; graph hint ≤ 320; rtk line ~200; goal ≤ 200.
+Measured sizes: CHARTER_CORE ~4,100; caveman 2,115; headroom 1,319 (folder text in); ponytail 3,029; i-have-adhd 6,781 (measured in Task 15a); graph hint ≤ 320; rtk line ~200; goal ≤ 200.
 - Main section ≤ 20,000 chars. Net change is small: the ponytail and ADHD copies the plugins inject today (~9,900 chars) are dropped (§6.4).
 - Subagent block ≤ 8,000 chars. About 2,900 of it replaces ponytail's own SubagentStart copy.
 - Each module line ≤ 320 chars; all module lines together ≤ 1,200.
@@ -121,7 +121,7 @@ On when the 5 h window or the week window is at ≥ 75 %. Off when both are belo
 
 ### 6.8 Everywhere
 
-- Each machine (Windows, WSL, Linux, macOS): the Task 14 setup box, once per machine (rtk, graphify, prependPlugins, rtk mirror rules).
+- Each machine (Windows, WSL, Linux, macOS): the Task 14 setup box, once per machine (rtk, graphify, prependPlugins, ponytail ultra; no rtk rules: per-call check, client 2026-11-28).
 - Cloud and mobile: the cloud environment's setup script installs pinned rtk 1.2.1 (SHA-256 checked) and graphify 0.9.120; the client approves the environment change in its own prompt.
 - Open sessions: `/reload-plugins` reloads `company`; the leader composes anew (one cache rebuild).
 
@@ -146,7 +146,7 @@ On when the 5 h window or the week window is at ≥ 75 %. Off when both are belo
 
 ## 10. Left to the builder
 
-Exact glyphs and colors; file layout of `company/savers/`; header regexes; final cap constants after measuring real texts (within §6.3); how modules register lines (`leaderLine` shape); test layout.
+Exact glyphs and colors; header regexes; final cap constants after measuring real texts (within §6.3); how modules register lines (`leaderLine` shape); test layout.
 
 ## 11. Risks
 

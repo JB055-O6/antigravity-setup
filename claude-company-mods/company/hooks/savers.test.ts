@@ -13,13 +13,30 @@ function roots(tag: string): Record<SaverId, string> {
 const skill = (r: Record<SaverId, string>, id: SaverId) => `${r[id]}/skills/${id}/SKILL.md`
 const installed = (r: Record<SaverId, string>) => Object.fromEntries(IDS.map((id) => [skill(r, id), SKILL_MD[id]]))
 
-// The engine's fs beneath: files by path (text or raw bytes), read as bytes up to `length`; each read is kept.
-function engine(files: Record<string, string | Uint8Array>) {
+// The engine's fs beneath: files by real path (text or raw bytes); `links` maps a spelled path to where it
+// leads. stat answers `realPath` (links followed, `..` folded); read gives bytes up to `length`. Reads are kept.
+function engine(files: Record<string, string | Uint8Array>, links: Record<string, string> = {}) {
   const reads: string[] = []
+  const real = (p: string) => {
+    const out: string[] = []
+    for (const part of p.split('/').slice(1)) {
+      if (part === '..') out.pop()
+      else if (part !== '.' && part !== '') out.push(part)
+      const at = `/${out.join('/')}`
+      if (at in links) out.splice(0, out.length, ...links[at]!.split('/').slice(1))
+    }
+    return `/${out.join('/')}`
+  }
   const fs = {
+    stat: async (path: string, o?: { resolve?: boolean }) => {
+      const r = real(path)
+      const kind = r in files ? 'file' : Object.keys(files).some((f) => f.startsWith(`${r}/`)) ? 'dir' : undefined
+      if (kind === undefined) throw new Error(`stat ${path} failed: ENOENT`)
+      return { kind, size: 0, mtimeMs: 0, isLink: false, ...(o?.resolve ? { realPath: r } : {}) }
+    },
     read: async (path: string, o?: { as?: string; length?: number }) => {
       reads.push(path)
-      const f = files[path]
+      const f = files[real(path)]
       if (f === undefined) throw new Error(`ENOENT: no such file, open '${path}'`)
       if (o?.as !== 'bytes') throw new Error('test engine answers bytes only')
       const bytes = (typeof f === 'string' ? new TextEncoder().encode(f) : f).slice(0, o.length)
@@ -40,12 +57,13 @@ test('stripFrontmatter removes the --- block and keeps the body as it is', () =>
 
 test('every BUNDLED text is the installed body of today, byte for byte, with the folder named in words', () => {
   expect([...IDS].sort()).toEqual(['caveman', 'headroom', 'i-have-adhd', 'ponytail'])
-  for (const id of IDS) expect(BUNDLED[id]).toBe(stripFrontmatter(SKILL_MD[id]).replaceAll(DIR, 'the headroom skill folder'))
+  // An own cut, not the code's: the body starts after the second `---` line.
+  const body = (md: string) => md.slice(md.indexOf('\n---\n', 3) + 5)
+  for (const id of IDS) expect(BUNDLED[id]).toBe(body(SKILL_MD[id]).replaceAll(DIR, 'the headroom skill folder'))
   expect(SKILL_MD.headroom).toContain(DIR)
   expect(BUNDLED.headroom).toContain('`the headroom skill folder` is the folder that contains this file.')
-  // Measured bodies (UTF-8 bytes): caveman 2,115; ponytail 3,029; i-have-adhd 6,781.
   const bytes = (s: string) => new TextEncoder().encode(s).length
-  expect([bytes(BUNDLED.caveman), bytes(BUNDLED.ponytail), bytes(BUNDLED['i-have-adhd'])]).toEqual([2115, 3029, 6781])
+  expect(IDS.map((id) => [id, bytes(BUNDLED[id])])).toEqual([['ponytail', 3029], ['caveman', 2115], ['headroom', 1319], ['i-have-adhd', 6781]])
 })
 
 test('COMPACT has one short line per saver, each naming its saver', () => {
@@ -98,7 +116,7 @@ test('a SKILL.md of 9,000 B gives the bundled copy; 8,000 B is still read', asyn
 test('bad UTF-8, a failed read, a blank body, no root or a root that is no absolute path: the bundled copy', async () => {
   const r = roots('bad')
   const files: Record<string, string | Uint8Array> = installed(r)
-  files[skill(r, 'caveman')] = new Uint8Array([0x23, 0x20, 0xc3, 0x28, 0x0a])
+  files[skill(r, 'caveman')] = new Uint8Array([...new TextEncoder().encode('---\nname: caveman\n---\n# '), 0xc3, 0x28, 0x0a])
   delete files[skill(r, 'headroom')]
   files[skill(r, 'ponytail')] = '---\nname: ponytail\n---\n\n  \n'
   const { eng, reads } = engine(files)
@@ -123,4 +141,35 @@ test('${CLAUDE_SKILL_DIR} is never in any text the savers give', async () => {
   expect(got.text.caveman).toBe('Run /d$&/caveman/skills/caveman/a.py, then /d$&/caveman/skills/caveman/b.py.\n')
   const all = [...Object.values(BUNDLED), ...Object.values(COMPACT), ...Object.values(got.text), ponytailUltra(BUNDLED.ponytail)]
   for (const t of all) expect(t).not.toContain(DIR)
+})
+
+test('a SKILL.md or a skills folder linked outside the root: the bundled copy, and no read', async () => {
+  const r = roots('link')
+  const files = { ...installed(r), '/elsewhere/SKILL.md': SKILL_MD.caveman, '/away/headroom/SKILL.md': SKILL_MD.headroom }
+  const { eng, reads } = engine(files, { [skill(r, 'caveman')]: '/elsewhere/SKILL.md', [`${r.headroom}/skills/headroom`]: '/away/headroom' })
+  const got = await loadSavers(eng, r)
+  expect([got.source.caveman, got.source.headroom, got.source.ponytail]).toEqual(['bundled', 'bundled', 'installed'])
+  expect(reads.some((p) => p.includes('caveman') || p.includes('headroom') || p.startsWith('/elsewhere') || p.startsWith('/away'))).toBe(false)
+  // `..` folds away: a path that climbs out of the root and back in is still under it.
+  const up = roots('up')
+  const back = engine(installed(up))
+  expect((await loadSavers(back.eng, { ...up, ponytail: '/up/ponytail/skills/..' })).source.ponytail).toBe('installed')
+})
+
+test('a root that is itself a link still reads: the file is under the root once both are resolved', async () => {
+  const files = { [skill(roots('store'), 'ponytail')]: SKILL_MD.ponytail }
+  const got = await loadSavers(engine(files, { '/cache/ponytail': '/store/ponytail' }).eng, { ponytail: '/cache/ponytail' })
+  expect(got.source.ponytail).toBe('installed')
+  expect(got.text.ponytail).toBe(BUNDLED.ponytail)
+})
+
+test('no frontmatter, or a name: that is not the saver: the bundled copy', async () => {
+  const r = roots('name')
+  const files = installed(r)
+  files[skill(r, 'caveman')] = stripFrontmatter(SKILL_MD.caveman)
+  files[skill(r, 'headroom')] = SKILL_MD.headroom.replace('name: headroom', 'name: evil')
+  files[skill(r, 'ponytail')] = SKILL_MD.ponytail.replace('name: ponytail', 'name: "ponytail"')
+  files[skill(r, 'i-have-adhd')] = SKILL_MD['i-have-adhd'].replace('name: i-have-adhd', 'description-name: i-have-adhd')
+  const got = await loadSavers(engine(files).eng, r)
+  expect(got.source).toEqual({ caveman: 'bundled', headroom: 'bundled', ponytail: 'installed', 'i-have-adhd': 'bundled' })
 })

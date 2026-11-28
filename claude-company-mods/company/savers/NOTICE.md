@@ -6,8 +6,8 @@
 |---|---|---|---|
 | caveman | 1.1.2 | Ali Akram | https://github.com/akramsystems/caveman |
 | headroom | 1.3.2 | Stefan Petrovici | https://github.com/petrovicistefan/claude-code-plugins |
-| ponytail | 5.3.3 | Dietrich Gebert | https://github.com/DietrichGebert/ponytail |
-| i-have-adhd | 0.4.1 | Ayoub G. | https://github.com/ayghri/i-have-adhd |
+| ponytail | 5.3.3 | DietrichGebert | https://github.com/DietrichGebert/ponytail |
+| i-have-adhd | 0.4.1 | Ayoub Ghriss | https://github.com/ayghri/i-have-adhd |
 
 ## caveman 1.1.2
 

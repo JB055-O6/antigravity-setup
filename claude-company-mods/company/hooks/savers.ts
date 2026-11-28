@@ -26,9 +26,12 @@ export const COMPACT: Record<SaverId, string> = {
   'i-have-adhd': 'i-have-adhd: client replies lead with the result, numbered steps, one next action.',
 }
 
+// A leading `---` block of YAML frontmatter.
+const FRONT = /^---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/
+
 // The text below a leading `---` block, as it is; the text unchanged when it has none.
 export function stripFrontmatter(md: string): string {
-  const m = /^---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/.exec(md)
+  const m = FRONT.exec(md)
   return m ? md.slice(m[0].length) : md
 }
 
@@ -49,10 +52,9 @@ export async function loadSavers($: EngineInterface, roots: Record<string, strin
     const root = roots[id]
     // Only an absolute folder: a provenance (`name@market`) read as a path would land in the working folder.
     if (root === undefined || !/^(\/|[A-Za-z]:[\\/]|\\\\)/.test(root)) continue
-    const dir = `${root}/skills/${id}`
-    const path = `${dir}/SKILL.md`
+    const path = `${root}/skills/${id}/SKILL.md`
     let body = bodies.get(path)
-    if (!body) bodies.set(path, (body = skillBody($, path, dir)))
+    if (!body) bodies.set(path, (body = skillBody($, root, id)))
     const got = await body
     if (got === undefined) continue
     text[id] = got
@@ -61,16 +63,26 @@ export async function loadSavers($: EngineInterface, roots: Record<string, strin
   return { text, source }
 }
 
-// The body of one SKILL.md, or undefined when it is missing, unreadable, over SKILL_BYTES, not UTF-8 or blank.
-async function skillBody($: EngineInterface, path: string, dir: string): Promise<string | undefined> {
+// The body of the saver's SKILL.md, or undefined when the file is missing, unreadable, outside the root once
+// links and `..` are resolved, over SKILL_BYTES, not UTF-8, not named `id` in its frontmatter, or blank.
+async function skillBody($: EngineInterface, root: string, id: SaverId): Promise<string | undefined> {
+  const dir = `${root}/skills/${id}`
   try {
-    const { base64 } = await $.fs.read(path, { as: 'bytes', length: SKILL_BYTES + 1 })
+    const [top, file] = await Promise.all([$.fs.stat(root, { resolve: true }), $.fs.stat(`${dir}/SKILL.md`, { resolve: true })])
+    const base = top.realPath
+    if (base === undefined || file.kind !== 'file' || file.realPath === undefined) return undefined
+    const sep = base.startsWith('/') ? '/' : '\\'
+    if (!file.realPath.startsWith(base.endsWith(sep) ? base : base + sep)) return undefined
+    // shortcut: a file swapped for a link after this stat is still read; upgrade when the engine reads by handle.
+    const { base64 } = await $.fs.read(file.realPath, { as: 'bytes', length: SKILL_BYTES + 1 })
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
     if (bytes.length > SKILL_BYTES) return undefined
     const md = new TextDecoder().decode(bytes)
     // shortcut: a file with a real U+FFFD in it also gives the bundled copy; decode with `fatal` once the engine's types take it.
     if (md.includes('\uFFFD')) return undefined
-    const body = stripFrontmatter(md)
+    const front = FRONT.exec(md)
+    if (!front || !new RegExp(`^name:[ \\t]*(['"]?)${id}\\1[ \\t]*\\r?$`, 'm').test(front[0])) return undefined
+    const body = md.slice(front[0].length)
     return body.trim() ? body.replaceAll(DIR, () => dir) : undefined
   } catch {
     return undefined

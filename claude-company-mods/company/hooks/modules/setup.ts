@@ -24,7 +24,7 @@ type Place = { win: boolean; key?: string; sep: string; bin: string; settings: s
 type End = { reason?: string; text: string }
 
 export const QUESTION =
-  'Company can set up this machine. It installs RTK and graphify, lets RTK shrink read-only commands you already allow, and loads Company first. Set it up now?'
+  'Company can set up this machine. It installs RTK and graphify, and loads Company first. It lets RTK shrink read-only commands you already allow, and sets ponytail to ultra. Set it up now?'
 export const COMPANY = 'company@synced'
 // ponytail (5.3.3) reads this env first: its own band and texts then say ultra, as the leader does.
 export const PONYTAIL = 'PONYTAIL_DEFAULT_MODE'

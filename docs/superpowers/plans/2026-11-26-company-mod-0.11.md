@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript function hooks against the `claude-code` engine API (types at `claude-company-mods/company/.claude-plugin/types/claude-code/index.d.ts`), tests with `claude-code/testing` run by `claude plugin test`, bash + Python 3.13 for the benchmark, rtk 1.2.1, graphify (`graphifyy==0.9.120`).
 
-**Spec:** `docs/superpowers/specs/2026-11-26-company-mod-0.11-design.md` (approved). Audit: `claude-company-mods/company/grill-report-2026-11-26.md` (finding IDs F1-F36).
+**Spec:** `docs/superpowers/specs/2026-11-26-company-mod-0.11-design.md` (approved), amended by `docs/superpowers/specs/2026-11-28-company-leader-design.md` (approved 2026-11-28; wins where they differ). Audit: `claude-company-mods/company/grill-report-2026-11-26.md` (finding IDs F1-F36).
 
 ## Global Constraints
 
@@ -28,7 +28,9 @@
   })
   ```
 - Module wiring (validator-proven in Task 6): each module file exports a top-level `export function register<Name>(on: On, ctx: Ctx): void` (e.g. `registerBashcap`); `register.tsx` imports each by name and calls them one by one in the spec order (no loop, no `m.register(...)`, which the validator refuses). The same event may be hooked by several modules only when every hook after the first carries a matcher; use `{}` for "match all" (`on('session.start', {}, hook)`). Chain order = call order in register.tsx.
-- Caps: charter section ≤ 9,000 chars (raised by spec §16 for the caveman + headroom rule text), its bytes fixed for the whole session; subagent prompt additions ≤ 4,000 chars; graph hint ≤ 320 chars; graphify command output ≤ 6 KB.
+- Caps (leader spec §6.3): leader main section ≤ 20,000 chars, its bytes fixed for the whole session; subagent block ≤ 8,000 chars; each module line ≤ 320 chars, all module lines ≤ 1,200; graph hint ≤ 320 chars; graphify command output ≤ 6 KB. Over a cap: the longest saver swaps to its bundled compact copy (headroom, then caveman, then i-have-adhd); never cut mid-text; CHARTER_CORE and the goal line are never dropped.
+- Economy (leader spec §6.7): on when the 5 h or the week window is ≥ 75 %; off when both are < 70 %. The benchmark waits at 5 h ≥ 73 % or week ≥ 73 %.
+- Saver levels (leader spec §6.6): ponytail ultra; rtk mode `full` by default; graph auto; caveman, headroom, i-have-adhd always on.
 - Bash cap: output > 30 KB → keep 12 KB head + 12 KB tail; economy: > 15 KB → 6 KB + 6 KB; keep up to 40 cut lines matching `/error|fail|exception|traceback|fatal/i`; cut on code points. If V11 (Task 10) shows the engine already cuts near 30,000 chars, the threshold becomes 12 KB (head 5 KB + tail 5 KB).
 - Breaker: 3 consecutive failures → module off for this session only; a timeout counts as a failure; a missing binary is `off: not installed`, not a failure; `/company on <id>` turns it back on.
 - Token estimate: `Math.ceil(chars / 4)`, always labelled "estimate". The band shows **net** = saved − added, negative when negative.
@@ -37,7 +39,7 @@
 - rtk pin: `v1.2.1`, SHA-256 per asset copied from that release's `checksums.txt` into source.
 - Nudge: toast at ≥ 60% of the context window, once per crossing; never through `prompt.compose`.
 - Main model never changed; the governor never raises effort on the main loop.
-- Off-machine session (cloud, SSH, VM) with a device attached: rtk skips device calls; router and crew step aside for the session. Cloud: no install notice, no installs.
+- Off-machine session (cloud, SSH, VM) with a device attached: rtk skips device calls; router and crew step aside for the session. Cloud: the mod never installs or asks; rtk and graphify come from the cloud environment's setup script (Task 14b).
 - Panel atom shape tag: `'panel-3'`.
 - UI text is ASD-STE100: ≤ 20 words per sentence; active voice; present tense; banned words: `utilize, leverage, via, e.g., i.e., etc., robust, seamless`, and words ending in `-ing` except names in `STE_NAMES` (`RTK`, `Haiku`, `Sonnet`, `Opus`, `Fable`, graph and module ids).
 - Git: commit on `claude/models-capability-analysis-pt61if` only; no model IDs in commit text; end each commit with the session's Co-Authored-By and Claude-Session lines.
@@ -55,9 +57,18 @@
 ## Automation amendments (spec §16, client 2026-11-27) — these override the task text below
 
 - **No slash commands.** Task 14 becomes the **setup** module: a one-time `$.ui.ask` box at session start (once per machine via a `$.store` flag; never in cloud, CI or when `$.ui.ask` rejects as in `-p`). Yes → install rtk + graphify (pinned), add mirrored read-only rtk allow rules for commands the user already allows, add `prependPlugins: ["company@synced"]`; settings merged as JSON with a backup `settings.json.company-bak`, refuse on invalid JSON, record what was added. Exports `undoSetup` for the pane's **Undo setup** button and `runSetup` for its **Set up** button. Tests: consent yes/no, invalid JSON refused, backup written, only read-only mirrors added, never `Bash(rtk:*)`, undo removes only added entries, cloud/CI/-p never asks.
-- **Task 15** rule changes from "copy only when the plugin is missing" to "inject when the rules are not active": ponytail and i-have-adhd are active through their own hooks when enabled; caveman and headroom are always injected from the installed plugin's SKILL.md body (frontmatter stripped; read once at session start), else from the built-in compact copy. Tests: caveman + headroom text present even when both plugins are enabled; ponytail text absent when ponytail is enabled; caps 9,000 / 4,000 hold.
+- *(Superseded by the leader amendments below.)* **Task 15** rule changes from "copy only when the plugin is missing" to "inject when the rules are not active": ponytail and i-have-adhd are active through their own hooks when enabled; caveman and headroom are always injected from the installed plugin's SKILL.md body (frontmatter stripped; read once at session start), else from the built-in compact copy. Tests: caveman + headroom text present even when both plugins are enabled; ponytail text absent when ponytail is enabled; caps 9,000 / 4,000 hold.
 - **Task 16** shows the graph box: state from `graphStatus` (building / ready / updating / kept / off + reason), last build time and graphify-out disk use (`shared.graph.bytes`). **Task 16** drops all `/company` subcommands. The pane gets buttons: **Turn on** per off module, **Set up** when setup is not done, **Undo setup** when it is. `/company` stays an optional text copy. Notices are deduplicated per kind (fixes the T8 flood).
 - **Task 13** never needs a command: auto-build and auto-update only.
+
+## Leader amendments (leader spec 2026-11-28, client-approved) — these override the task text below
+
+- **Task 14** fix round 1 also: setup sets `env.PONYTAIL_DEFAULT_MODE = "ultra"` in the user settings merge (undo restores the old value); economy constants 75 / 70; bench `LIMIT` and `WEEK_LIMIT` 0.73 (`score3.py`, `bench3.sh` text).
+- **Task 14b** (new): cloud environment setup script. **Tasks 15a-15d** (new) replace Task 15: saver texts, the leader module, dedupe, the monitor.
+- **Task 16** adds: a LEADER box first in the pane (6 of 6 savers and their level, copies dropped, tokens saved by dedupe); the economy signal is one small glyph with color in the limits bubble (no "eco on" words; legend in the pane); a "What goes into each request" list from `topContext` (main and subagents); a module's red "costs more than it saves" only from `netFlag === 'red'`; others show their benchmark verdict.
+- **Task 17** adds: V12 dedupe live proof (input tokens drop with the leader on; with the leader off nothing is dropped); V13 each saver text present once in main and once per subagent (live `-p` run, count headers in the request log); V14 a saver skill call gives the "already active" line; V15 a fresh cloud session shows rtk and graph on.
+- **Task 18** adds setup G = setup C with `COMPANY_OFF=leader` (cost of the leader texts); writes `verdict` per behaviour module into `modules/index.ts`. rtk stays `full` by default (client); if the data show `full` loses, report to the client instead of switching.
+- Leader review focus: (1) the leader off or broken → plugin copies are never dropped; (2) a plugin update changes its header → no drop, never a lost rule; (3) a hot reload mid-session → texts built at first compose, same bytes; (4) fork, teammate, resume and workflow agents → no block and no drop; (5) a saver skill typed with arguments → arguments kept.
 
 ## Phase A: safety net and fair measurement
 
@@ -316,18 +327,72 @@
 - [ ] **Step 1: Tests:** a hash mismatch → nothing written, a clear error; cloud → no process runs; uv missing → pipx tried; all missing → steps printed; the notice shows once.
 - [ ] **Step 2:** Run: fail. **Step 3:** Implement. **Step 4:** CHECK, then commit.
 
-### Task 15: Charter rewrite and the savers block (F21, spec §7.3)
+### Task 14b: Cloud environment setup script (leader spec §6.8, §12.5) — controller only
+
+No repo files. The controller (not a subagent: the environment tools are the controller's).
+
+- [ ] **Step 1:** `get_environment`. If personal and editable, write the script; else `create_environment` (personal, `switch_session: "network_only"`).
+- [ ] **Step 2:** The script, run once here by hand first and seen to work: download the rtk v1.2.1 `linux-x64` asset named in `pins.ts`, check its SHA-256 against `pins.ts`, unpack to `/usr/local/bin`; `pip install graphifyy==0.9.120` (or `uv tool install`); `rtk --version` and `graphify --version` print the pinned versions. Idempotent; skip a step whose tool is already at the pinned version.
+- [ ] **Step 3:** Propose it (`update_environment` or `create_environment`); add only the exact hosts the download needs. The client approves in the tool's own prompt.
+- [ ] **Step 4:** Log the result in `progress.md`. The proof (a fresh cloud session shows `rtk` and `graph` on) goes to V15 in Task 17.
+
+### Task 15a: Saver texts (leader spec §6.2, §12; replaces old Task 15 and its 2026-11-28 brief)
 
 **Files:**
-- Modify: `$R/hooks/charter.ts`, `$R/hooks/directives.ts`, `$R/hooks/modules/charter.ts`, `$R/hooks/modules/diet.ts`
-- Test: `$R/hooks/charter.test.ts`, `$R/hooks/directives.test.ts`
+- Create: `$R/hooks/savers.ts`, `$R/savers/NOTICE.md` (the 4 MIT licenses, credit lines)
+- Test: `$R/hooks/savers.test.ts`
 
 **Interfaces:**
-- Produces: `export const CHARTER_CORE: string` (the 21 rules, the "when to run" part, delegation, precedence; reworded only, no rule dropped); `export const SAVERS: Record<'ponytail'|'headroom'|'caveman'|'i-have-adhd'|'rtk'|'graphify', string>` (compact one-liners; all six together ≤ 1,200 chars); `export function charterText(missing: readonly string[], rtkOn: boolean, hasGraph: boolean): string` (CHARTER_CORE + the lines for missing plugins + rtk line if on + graph hint if a graph exists; ≤ 4,800 chars); `export function dietText(missing, rtkOn, hasGraph): string` (report rule + the same lines; ≤ 2,000 chars).
-- Produces: `directiveState` covers 6 items: the 4 plugins and 2 binaries.
-- Consumes: `graphHint` (Task 13); the binary probes (Tasks 12, 13).
+- Produces: `export type SaverId = 'caveman' | 'headroom' | 'ponytail' | 'i-have-adhd'`; `export const BUNDLED: Record<SaverId, string>` (exact SKILL.md bodies of caveman 1.x, headroom, ponytail 5.3.3, i-have-adhd 0.4.1 as installed here today, frontmatter stripped; `${CLAUDE_SKILL_DIR}` left as the literal text `the headroom skill folder`); `export const COMPACT: Record<SaverId, string>` (one-liners from base spec §7.3, ≤ 300 chars each); `export function stripFrontmatter(md: string): string`; `export function ponytailUltra(body: string): string` (first line `PONYTAIL level: ultra (set by the company leader).`, then the body); `export async function loadSavers($: EngineInterface, roots: Record<string, string>): Promise<{ text: Record<SaverId, string>; source: Record<SaverId, 'installed' | 'bundled'> }>` (reads `<root>/skills/<id>/SKILL.md` for each plugin root known from the engine, ≤ 8,000 B, valid UTF-8, frontmatter stripped, `${CLAUDE_SKILL_DIR}` replaced by that skill's folder; any failure → BUNDLED).
+- Spike first (one throwaway run, results in the task report): does `plugin.register` (or any `$` call) give the root of a plugin with no hooks module (caveman, headroom)? Is a subagent's `agentId` known at `agent.spawn` (or its result)? Does `prompt.attachment` run after `prompt.compose` on the first request? The answers set where `roots` comes from (none → `{}`, BUNDLED used).
 
-- [ ] **Step 1: Tests:** with all four plugins on → no plugin saver lines in the charter; with caveman missing → only the caveman line; length ≤ 4,800 in the worst case (all missing, rtk on, graph on); the text is computed once per session (two composes → identical bytes even after a plugin change mid-session); every one of rules 1-21 is still present (match `/\b1\. /` … `/\b21\. /`).
+- [ ] **Step 1: Tests:** `stripFrontmatter` removes a `---` block and keeps the body; a SKILL.md of 9,000 B → BUNDLED; bad UTF-8 → BUNDLED; `${CLAUDE_SKILL_DIR}` never in any output; installed body read once (two calls → one `fs.read`); `ponytailUltra` first line exact; every BUNDLED text equals today's installed body byte for byte (fixture copies).
+- [ ] **Step 2:** Run: fail. **Step 3:** Implement. **Step 4:** CHECK, then commit.
+
+### Task 15b: The leader module (leader spec §6.1-§6.3, §6.6)
+
+**Files:**
+- Create: `$R/hooks/modules/leader.ts`, `$R/hooks/leader.ts` (pure text builders)
+- Modify: `$R/hooks/charter.ts` (CHARTER → `CHARTER_CORE`, rules unchanged, the "Core directives" one-liners leave it), `$R/hooks/register.tsx` (`registerLeader` first; `registerCharter` gone), `$R/hooks/modules/index.ts` (meta `leader` first with caps `{ section: 20000, subagentBlock: 8000, lines: 1200 }`; `charter` meta gone; diet caps `{}`), `$R/hooks/modules/diet.ts` (spawn hook gone; Read and Grep caps stay), `$R/hooks/directives.ts`, `$R/hooks/core.ts` (`ModuleId` gets `leader`, loses `charter`; `Shared.lines: Record<string, string>`), `$R/types/index.d.ts`, `$R/hooks/modules/graph.ts` and `rtk.ts` (call `leaderLine`; rtk default mode `full`), crew prompts (`crew.ts`: point to the leader's report rule, no own "15 lines")
+- Delete: `$R/hooks/modules/charter.ts`
+- Test: `$R/hooks/leader.test.ts`, `$R/hooks/modules/leader.module.test.ts`; update `charter.test.ts`, `directives.test.ts`, diet and wiring tests that name `charter`
+
+**Interfaces:**
+- Consumes: `loadSavers`, `BUNDLED`, `COMPACT`, `ponytailUltra` (15a); `graphHint` (13); rtk on/off (12).
+- Produces: `export const GOAL_LINE: string` (≤ 200 chars: "Goal: max quality and max saving at once. Cut waste, never quality. Prove each gain."); `export function leaderLine(ctx: Ctx, id: string, text: string): void` (stores a capped line in `Shared.lines`; called by modules at session start or first compose); `export function mainSection(t: Record<SaverId, string>, lines: Record<string, string>): string` (GOAL_LINE, CHARTER_CORE, ponytail ultra, caveman, headroom, i-have-adhd, then lines sorted by id; fallback order on overflow); `export function subagentBlock(t, lines): string` (GOAL_LINE, report rule ≤ 25 lines, caveman, headroom, ponytail ultra, lines; no i-have-adhd); `Shared.leader: { built: boolean; main?: string; sub?: string; agents: Set<string> }` (agents = subagent ids that got the block).
+- The leader builds both texts once, at the first `prompt.compose` (a hot reload fires no `session.start`), then reuses the same bytes. It adds the subagent block at `agent.spawn` (not for forks, teammates, resumes or workflow agents) and records the agent id.
+- `directiveState` returns 6 items: the 4 savers (`on`, why: `leader` / `leader (bundled copy)`) and rtk, graphify (`on` / `not installed`).
+- Persisted health and ledger under `charter` are dropped on restore; `leader` starts at zero.
+
+- [ ] **Step 1: Tests:** rules 1-21 present (`/\b1\. /` … `/\b21\. /`); GOAL_LINE first in both texts; main ≤ 20,000 and sub ≤ 8,000 in the worst case (real BUNDLED texts + all lines); overflow swaps headroom first, then caveman, then i-have-adhd, never mid-text; sub has no i-have-adhd text; two composes → identical bytes after a mid-session plugin change and after a reload; a fork/teammate/resume/workflow spawn gets no block and is not recorded; a line over 320 chars is capped; a restore holding `charter` keys loads clean.
+- [ ] **Step 2:** Run: fail. **Step 3:** Implement. **Step 4:** CHECK, then commit.
+
+### Task 15c: Dedupe (leader spec §6.4, §12.1, §12.2)
+
+**Files:**
+- Create: `$R/hooks/dedupe.ts` (pure), Modify: `$R/hooks/modules/leader.ts`
+- Test: `$R/hooks/dedupe.test.ts`, `$R/hooks/modules/leader.module.test.ts`
+
+**Interfaces:**
+- Produces: `export function dedupeText(text: string): { text: string | null; dropped: SaverId[] }` — for text whose header (after the engine prefix `SessionStart:<src> hook success: ` or `SubagentStart hook additional context: `) is `PONYTAIL MODE ACTIVE`, `PONYTAIL MODE CHANGED`, `PONYTAIL MODE OFF` or `ADHD MODE ACTIVE`: remove the rule text; keep a `Codebase map` block (from its heading to the end of that block) and any other non-rule part; `null` when nothing is left. Unknown header → unchanged.
+- `prompt.attachment` hook (`{}`): only `origin.kind === 'hook'`; only when the leader's copy is in place for that context (main: `built`; subagent: `agents.has(e.agentId)`); returns `{ text }` from `dedupeText`; counts dropped chars as saved.
+- `skill.prompt` hook (`{}`): for skill `caveman`, `headroom`, `ponytail` (any level argument) or `i-have-adhd`, when the leader's copy is in place for that context, returns `{ text: '<id> is already active (company leader).' }` plus any argument text the client typed, unchanged.
+
+- [ ] **Step 1: Tests:** today's real ponytail and ADHD SessionStart texts (fixtures from the spike) → rules gone, codebase map kept; same input → same output (byte-equal); leader not built → pass-through; subagent id not in `agents` → pass-through; `origin.kind === 'engine'` → never touched; unknown header → unchanged; `/ponytail lite` → "already active" line; skill args kept.
+- [ ] **Step 2:** Run: fail. **Step 3:** Implement. **Step 4:** CHECK, then commit.
+
+### Task 15d: The monitor and the net-gain data (leader spec §6.5, §12.3)
+
+**Files:**
+- Create: `$R/hooks/monitor.ts` (pure counters), Modify: `$R/hooks/modules/leader.ts`, `$R/hooks/modules/index.ts` (`direct: boolean` per module; `verdict?: string` filled in Task 18), `$R/hooks/core.ts` (`Shared.context`, `Shared.events`)
+- Test: `$R/hooks/monitor.test.ts`
+
+**Interfaces:**
+- Produces: `Shared.context: Record<string, { n: number; chars: number }>` keyed `<main|sub>:<origin kind>:<type>`; `Shared.events: Record<string, number>` per event family; `export function topContext(s: Shared, k: number): { key: string; chars: number; tokens: number }[]` (tokens = `estimateTokens`); `export function netFlag(m: ModuleMeta, e: Entry): 'red' | 'ok' | 'verdict'` (`red` only when `direct` and added > saved; modules with `direct: false` return `verdict`).
+- `direct: true` for bashcap, rtk, diet, leader; false for the rest.
+- Observer hooks (one per family, `{}` matcher, after the working hooks of each event): `session.start`, `session.end`, `session.compact`, `prompt.submit`, `prompt.compose`, `prompt.attachment`, `skill.prompt`, `tool.call`, `turn.step`, `turn.complete`, `agent.spawn`, `plugin.register`, `ui.render`. Each only increments a counter (no `await` before `next`), passes through, never throws for expected input and adds nothing to any prompt.
+
+- [ ] **Step 1: Tests:** 3 attachments of 2 types → right counts and chars; subagent keys apart from main; `topContext` order by chars; `netFlag` red only for a direct module with added > saved; a behaviour module → `verdict`; an observer error does not change the event's result.
 - [ ] **Step 2:** Run: fail. **Step 3:** Implement. **Step 4:** CHECK, then commit.
 
 ## Phase D: the dashboard
